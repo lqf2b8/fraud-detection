@@ -1,0 +1,25 @@
+# Data & artifacts (competition data may not be redistributed)
+data/raw/*
+data/processed/*
+models/*
+reports/*
+!**/.gitkeep
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Env / secrets
+.env
+kaggle.json
+
+# OS / editors
+.DS_Store
+.vscode/
+.idea/
