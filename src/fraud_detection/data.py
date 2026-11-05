@@ -1,6 +1,6 @@
 """Data loading.
 
-`load_raw` reads the IEEE-CIS competition files (download with scripts/download_data.sh).
+`load_raw` reads the IEEE-CIS competition files (download with scripts/download_data.py).
 `make_synthetic` generates a small dataset with the same core schema so the whole stack
 (training, API, dashboard, CI) runs without the 1.3 GB Kaggle download.
 """

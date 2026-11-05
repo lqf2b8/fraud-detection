@@ -4,7 +4,7 @@ install:          ## local dev environment
 	pip install -e ".[dev]" -r services/api/requirements.txt -r services/dashboard/requirements.txt
 
 data:             ## download IEEE-CIS data (requires Kaggle API token + joined competition)
-	bash scripts/download_data.sh
+	python scripts/download_data.py
 
 train:            ## train on real data in Docker
 	docker compose --profile train run --rm trainer

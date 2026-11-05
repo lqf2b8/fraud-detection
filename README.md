@@ -36,7 +36,8 @@ To use the real data, join the competition and accept its rules, then add your K
 
 ```bash
 cp .env.example .env   # fill in KAGGLE_USERNAME and KAGGLE_KEY (Kaggle → Settings → API)
-make data    # downloads to data/raw (git-ignored)
+pip install kaggle
+make data    # downloads to data/raw (git-ignored); same as: python scripts/download_data.py
 make train
 curl -X POST localhost:8000/reload   # API picks up the new model
 ```
@@ -60,7 +61,7 @@ services/trainer/      training job image
 services/api/          FastAPI service
 services/dashboard/    Plotly Dash app
 notebooks/             EDA and experiments
-scripts/               data download
+scripts/               data download (cross-platform Python)
 tests/                 unit + API tests (run on synthetic data)
 ```
 
