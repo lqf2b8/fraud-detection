@@ -25,7 +25,7 @@ def evaluate(y_true, scores) -> dict:
         "best_f1": float(f1[best]),
         "best_f1_threshold": float(thresholds[best]) if len(thresholds) else 0.5,
         "base_rate": float(y_true.mean()),
-        "n_valid": int(len(y_true)),
+        "n_valid": len(y_true),
     }
 
 

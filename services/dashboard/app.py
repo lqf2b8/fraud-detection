@@ -124,7 +124,7 @@ def score(_, amt, product, card4, card6, email, device):
                 "threshold": {"line": {"color": "black", "width": 3}, "value": body["threshold"] * 100},
             },
         )
-    ).update_layout(height=300, margin=dict(t=60, b=20))
+    ).update_layout(height=300, margin={"t": 60, "b": 20})
     verdict = dbc.Alert(
         "Flagged for review" if pred["flagged"] else "Approve",
         color="danger" if pred["flagged"] else "success",
@@ -162,7 +162,7 @@ def performance(*_):
                     xaxis_title="Recall", yaxis_title="Precision", height=420)
     fi = meta["feature_importance"]
     fi_fig = go.Figure(go.Bar(x=list(fi.values())[::-1], y=list(fi.keys())[::-1], orientation="h"))
-    fi_fig.update_layout(title="Top features (gain)", height=420, margin=dict(l=120))
+    fi_fig.update_layout(title="Top features (gain)", height=420, margin={"l": 120})
     caption = html.Small(
         f"{meta['model_type']} trained {meta['trained_at']} on {meta['data_source']} data "
         f"({meta['n_train']:,} train rows, {m['n_valid']:,} validation rows).",

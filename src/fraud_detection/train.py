@@ -7,7 +7,7 @@ Usage:
 
 import argparse
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import joblib
 import lightgbm as lgb
@@ -62,7 +62,7 @@ def train(df: pd.DataFrame, data_source: str) -> dict:
 
     metadata = {
         "model_type": "LightGBM",
-        "trained_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "trained_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "data_source": data_source,
         "n_train": len(train_df),
         "n_features": len(fb.feature_names),
