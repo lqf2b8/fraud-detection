@@ -2,8 +2,8 @@
 
 Prereqs:
   1. pip install kaggle
-  2. Kaggle credentials: copy .env.example to .env and fill in KAGGLE_USERNAME / KAGGLE_KEY
-     (~/.kaggle/kaggle.json also works if .env isn't present)
+  2. Kaggle credentials: copy .env.example to .env and fill in either KAGGLE_API_TOKEN (new
+     tokens) or KAGGLE_USERNAME + KAGGLE_KEY (legacy). ~/.kaggle/kaggle.json also works.
   3. Join the competition and accept its rules:
      https://www.kaggle.com/competitions/ieee-fraud-detection/rules
 
@@ -37,9 +37,16 @@ def load_dotenv(path: Path) -> None:
 def main() -> None:
     load_dotenv(ROOT / ".env")
 
-    has_env = os.getenv("KAGGLE_USERNAME") and os.getenv("KAGGLE_KEY")
-    has_json = (Path.home() / ".kaggle" / "kaggle.json").exists()
-    if not (has_env or has_json):
+    kaggle_dir = Path.home() / ".kaggle"
+    has_creds = any(
+        [
+            os.getenv("KAGGLE_API_TOKEN"),
+            os.getenv("KAGGLE_USERNAME") and os.getenv("KAGGLE_KEY"),
+            (kaggle_dir / "kaggle.json").exists(),
+            (kaggle_dir / "access_token").exists(),
+        ]
+    )
+    if not has_creds:
         sys.exit("No Kaggle credentials found. Copy .env.example to .env and fill it in.")
 
     # Import after credentials are in the environment: the kaggle package authenticates on import.
@@ -53,10 +60,19 @@ def main() -> None:
     try:
         api.competition_download_files(COMPETITION, path=str(RAW_DIR), quiet=False)
     except Exception as e:  # noqa: BLE001 - most common cause: rules not accepted yet (403)
-        sys.exit(
-            f"Download failed: {e}\nIf this is a 403, join the competition and accept the rules at "
-            f"https://www.kaggle.com/competitions/{COMPETITION}/rules"
-        )
+        msg = f"Download failed: {e}\n"
+        if "401" in str(e):
+            msg += (
+                "401 = credentials rejected. A token from 'Generate New Token' goes in "
+                "KAGGLE_API_TOKEN, not KAGGLE_KEY. Check .env for typos/extra spaces, or "
+                "generate a fresh token."
+            )
+        elif "403" in str(e):
+            msg += (
+                "403 = no access. Join the competition and accept the rules at "
+                f"https://www.kaggle.com/competitions/{COMPETITION}/rules"
+            )
+        sys.exit(msg)
 
     archive = RAW_DIR / f"{COMPETITION}.zip"
     with zipfile.ZipFile(archive) as zf:

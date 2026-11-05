@@ -35,7 +35,7 @@ make up
 To use the real data, join the competition and accept its rules, then add your Kaggle credentials:
 
 ```bash
-cp .env.example .env   # fill in KAGGLE_USERNAME and KAGGLE_KEY (Kaggle → Settings → API)
+cp .env.example .env   # set KAGGLE_API_TOKEN (or legacy KAGGLE_USERNAME + KAGGLE_KEY)
 pip install kaggle
 make data    # downloads to data/raw (git-ignored); same as: python scripts/download_data.py
 make train
