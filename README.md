@@ -32,9 +32,10 @@ make up
 #   Dashboard: http://localhost:8050
 ```
 
-To use the real data, set up a Kaggle API token, join the competition and accept its rules, then:
+To use the real data, join the competition and accept its rules, then add your Kaggle credentials:
 
 ```bash
+cp .env.example .env   # fill in KAGGLE_USERNAME and KAGGLE_KEY (Kaggle → Settings → API)
 make data    # downloads to data/raw (git-ignored)
 make train
 curl -X POST localhost:8000/reload   # API picks up the new model
