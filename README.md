@@ -83,19 +83,26 @@ All results come from the same time-based holdout: the latest 20% of training tr
 |---|---|---|---|---|---|---|
 | v0 | Baseline: raw features, LightGBM | 0.588 | 0.923 | 90.6% | 43.4% | ~63% |
 | v1 | + past-only customer (UID) & card history features | 0.592 | 0.925 | 90.4% | 44.0% | ~64% |
+| v2 | + known-fraud history (customer, card, email + address, device), 30-day label delay | **0.659** | **0.941** | **96.3%** | **46.7%** | **~68%** |
 
-Random scoring would give a PR AUC of 0.034 (the fraud rate). Reviewing the top 5% of transactions by
-model score catches about 64% of all fraud.
+Random scoring would give a PR AUC of 0.034 (the fraud rate). With v2, reviewing the top 5% of
+transactions by model score catches about 68% of all fraud, and 96% of the top 1% are fraud.
 
-**v1 by segment:**
+**By segment:**
 
-| Segment | Share of validation | Fraud rate | PR AUC | ROC AUC |
+| Segment | Share of validation | Fraud rate | v1 PR AUC | v2 PR AUC |
 |---|---|---|---|---|
-| Customer seen in training | 39.9% | 1.98% | 0.722 | 0.961 |
-| New customer | 60.1% | 4.41% | 0.570 | 0.899 |
+| Customer seen in training | 39.9% | 1.98% | 0.722 | **0.919** |
+| New customer | 60.1% | 4.41% | 0.570 | 0.560 |
 
-New customers make up most of the volume, are 2.2× riskier, and are much harder to score, because
-there's no history to draw on. That's where most of the remaining headroom is.
+Known-fraud history is the strongest signal for returning customers. It doesn't help new customers:
+device and email + address history added nothing measurable. New customers make up most of the
+volume and the remaining headroom.
+
+**Caveat:** Vesta labels an account's later transactions as fraud once a fraud is reported. Some of
+the v2 gain on seen customers is the model learning that labeling rule. In production, a confirmed
+fraudulent account would usually be blocked, so the real-world lift on returning customers would
+likely be smaller than shown here.
 
 ## Roadmap
 
