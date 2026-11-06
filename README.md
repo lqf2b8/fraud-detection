@@ -196,6 +196,8 @@ so comparisons now use `make experiment` (features built once, 5 seeds, mean ± 
 | + velocity (card, region, email + address, device) | 0.640 ± 0.008 | 0.884 ± 0.013 | 0.554 ± 0.002 |
 | + velocity without device | 0.648 ± 0.009 | 0.896 ± 0.020 | 0.558 ± 0.002 |
 | Routed: separate new-customer model trained on first transactions only | 0.647 ± 0.003 | 0.917 ± 0.004 | 0.543 ± 0.004 |
+| Recency-weighted training, half-life 30 days | 0.655 ± 0.003 | 0.923 ± 0.007 | 0.548 ± 0.002 |
+| Recency-weighted training, half-life 90 days | 0.653 ± 0.004 | 0.906 ± 0.007 | 0.557 ± 0.001 |
 
 - The baseline is stable (seen-customer sd 0.004), so the earlier single-run drops were real, not noise.
 - **Diagnosed:** device-keyed velocity drifted between late training and validation (PSI up to 0.75; the
@@ -209,6 +211,9 @@ so comparisons now use `make experiment` (features built once, 5 seeds, mean ± 
   new customers than the model trained on everything (−0.016). Repeat transactions teach merchant, amount and
   device patterns that carry over to first-time customers, so restricting the training set loses more than it
   gains. Seen customers were unchanged (same model), which confirms the routing itself was correct.
+- **Recency weighting:** favoring recent transactions hurt new customers (−0.011 at a 30-day half-life), the same
+  lesson as routing. What carries over to first-time customers is broad, long-running behavior, so they
+  benefit from all of the history, not just the latest weeks.
 
 Known-fraud history is the strongest signal for returning customers. It doesn't help new customers:
 device and email + address history added nothing measurable. New customers make up most of the
