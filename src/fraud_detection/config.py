@@ -38,5 +38,9 @@ REVIEW_COST_USD = float(os.getenv("REVIEW_COST_USD", "10"))
 # Customer friction per false alarm (delayed or declined good customer). 0 = review cost only.
 FALSE_POSITIVE_COST_USD = float(os.getenv("FALSE_POSITIVE_COST_USD", "0"))
 
+# v5 routing: new customers (not in the training history) are scored by a model whose
+# categoricals are label-encoded with rare values grouped. "none" = one model for everyone.
+ROUTE_NEW = os.getenv("ROUTE_NEW", "catnum")
+
 # Fraction of the training period held out for early stopping, so validation stays untouched.
 EARLY_STOP_FRACTION = float(os.getenv("EARLY_STOP_FRACTION", "0.1"))

@@ -370,9 +370,21 @@ def performance_tab():
     )
 
     seg = meta.get("segments", {})
+    def fmt(v, key, spec):
+        return f"{v[key]:{spec}}" if key in v else "—"
+
+    seg_labels = {
+        "seen_customer": "Seen customer (in training history)",
+        "new_customer": "New customer",
+        "prior_known_fraud": "Prior known fraud",
+        "prior_known_legit": "Prior known legit",
+        "no_prior_info": "No prior info",
+        "excluding_known_fraud": "All except prior known fraud",
+    }
     seg_rows = [
-        html.Tr([html.Td(k.replace("_", " ")), html.Td(f"{v['share']:.1%}"), html.Td(f"{v['base_rate']:.2%}"),
-                 html.Td(f"{v['pr_auc']:.3f}"), html.Td(f"{v['roc_auc']:.3f}")])
+        html.Tr([html.Td(seg_labels.get(k, k.replace("_", " "))), html.Td(fmt(v, "share", ".1%")),
+                 html.Td(fmt(v, "base_rate", ".2%")), html.Td(fmt(v, "pr_auc", ".3f")),
+                 html.Td(fmt(v, "roc_auc", ".3f"))])
         for k, v in seg.items()
     ]
     an = meta.get("anomaly_only") or {}
@@ -405,7 +417,7 @@ def performance_tab():
         f"label delay {meta.get('label_delay_days', '—')} days).",
         className="text-muted",
     )
-    return html.Div([cards, html.H6("Seen vs. new customers") if seg_table else None, seg_table,
+    return html.Div([cards, html.H6("Performance by customer segment") if seg_table else None, seg_table,
                      dbc.Row([dbc.Col(dcc.Graph(figure=pr_fig), md=6), dbc.Col(dcc.Graph(figure=fi_fig), md=6)]),
                      caption], className="mt-3")
 

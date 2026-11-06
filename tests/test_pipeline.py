@@ -73,19 +73,21 @@ def test_explanations_sum_to_model_score(client):
     import pandas as pd
     from app import main
 
-    from fraud_detection.explain import contributions
+    from fraud_detection import routing
 
     df = pd.DataFrame([{"TransactionAmt": 75.0, "ProductCD": "C"}])
-    X = main.STATE["features"].transform(df)
-    contrib = contributions(main.STATE["model"], X)
-    p = main.STATE["model"].predict_proba(X)[:, 1][0]
+    fb, model = main.STATE["features"], main.STATE["model"]
+    X = fb.transform(df)
+    contrib = routing.contributions(model, fb, df, X)
+    p = routing.predict(model, fb, df, X)[0]
     assert np.isclose(1 / (1 + np.exp(-contrib.sum(axis=1).iloc[0])), p, atol=1e-6)
 
 
 def test_examples_round_trip(client):
     ex = client.get("/examples").json()
     assert ex and {"caught fraud", "cleared legit"} <= {e["outcome"] for e in ex}
-    detail = client.get(f"/examples/{ex[0]['TransactionID']}").json()
-    # The API re-scores the raw example and must reproduce the trainer's score exactly.
-    assert abs(detail["prediction"]["fraud_probability"] - ex[0]["score"]) < 1e-5
+    # Every review-queue example must reproduce the trainer's in-context score exactly.
+    for e in ex:
+        detail = client.get(f"/examples/{e['TransactionID']}").json()
+        assert abs(detail["prediction"]["fraud_probability"] - e["score"]) < 1e-5
     assert client.get("/examples/1").status_code == 404

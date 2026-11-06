@@ -36,19 +36,33 @@ def parse(variant: str) -> set[str]:
     return parts
 
 
-def _catnum(X_tr: pd.DataFrame, X_va: pd.DataFrame, cat_cols: list[str]):
-    X_tr, X_va = X_tr.copy(), X_va.copy()
-    for c in cat_cols:
-        tr_codes = X_tr[c].cat.codes.to_numpy()          # -1 = missing
-        va_codes = X_va[c].cat.codes.to_numpy()
-        counts = np.bincount(tr_codes[tr_codes >= 0], minlength=len(X_tr[c].cat.categories))
-        rare = counts < RARE_SHARE * len(X_tr)
-        def relax(codes, rare=rare):
+class CatNumEncoder:
+    """Label-encode categoricals as numbers, grouping values seen in < RARE_SHARE of training rows
+    into one code (-2); missing stays -1. Fitted on training, so serving applies the same map."""
+
+    def __init__(self) -> None:
+        self.rare: dict[str, np.ndarray] = {}
+
+    def fit(self, X: pd.DataFrame, cat_cols: list[str]) -> CatNumEncoder:
+        for c in cat_cols:
+            codes = X[c].cat.codes.to_numpy()
+            counts = np.bincount(codes[codes >= 0], minlength=len(X[c].cat.categories))
+            self.rare[c] = counts < RARE_SHARE * len(X)
+        return self
+
+    def transform(self, X: pd.DataFrame) -> pd.DataFrame:
+        X = X.copy()
+        for c, rare in self.rare.items():
+            codes = X[c].cat.codes.to_numpy()
             out = codes.astype("float64")
             out[(codes >= 0) & rare[np.clip(codes, 0, None)]] = -2  # rare values share one code
-            return out
-        X_tr[c], X_va[c] = relax(tr_codes), relax(va_codes)
-    return X_tr, X_va
+            X[c] = out
+        return X
+
+
+def _catnum(X_tr: pd.DataFrame, X_va: pd.DataFrame, cat_cols: list[str]):
+    enc = CatNumEncoder().fit(X_tr, cat_cols)
+    return enc.transform(X_tr), enc.transform(X_va)
 
 
 def _freq(X_tr: pd.DataFrame, X_va: pd.DataFrame, cat_cols: list[str]):

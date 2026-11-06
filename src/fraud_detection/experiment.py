@@ -27,6 +27,7 @@ from fraud_detection.features import FeatureBuilder, make_uid
 from fraud_detection.train import fit_model, segment_metrics, time_split
 
 COLUMNS = [("overall", "pr_auc"), ("seen_customer", "pr_auc"), ("new_customer", "pr_auc"),
+           ("excluding_known_fraud", "pr_auc"), ("no_prior_info", "pr_auc"),
            ("overall", "precision_at_5pct")]
 
 
@@ -97,11 +98,11 @@ def run(df, seeds: list[int], route: bool = False, half_life: float | None = Non
                                         None if weights is None else weights[first_tx])
             scores = np.where(seen_va, scores, new_model.predict_proba(X_va)[:, 1])
         overall = evaluate(y_va, scores)
-        seg = segment_metrics(fb, valid_df, y_va, scores)
+        seg = segment_metrics(fb, valid_df, y_va, scores, X_va)
         row = {
             "seed": seed, "n_trees": n_trees,
             "overall": {k: overall[k] for k in ("pr_auc", "roc_auc", "precision_at_5pct")},
-            **{k: {"pr_auc": v["pr_auc"]} for k, v in seg.items()},
+            **{k: {"pr_auc": v["pr_auc"]} for k, v in seg.items() if "pr_auc" in v},
         }
         rows.append(row)
         print(f"seed {seed:>3}  trees {n_trees:>5}  " + "  ".join(

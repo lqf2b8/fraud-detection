@@ -23,8 +23,11 @@ from fraud_detection.evaluate import (
     pr_curve_points,
     threshold_table,
 )
-from fraud_detection.explain import contributions, describe, global_importance
-from fraud_detection.features import FeatureBuilder, make_uid
+from fraud_detection.explain import describe, global_importance
+from fraud_detection.features import FeatureBuilder
+from fraud_detection.preprocess import CatNumEncoder
+from fraud_detection.routing import RoutedModel, predict
+from fraud_detection.routing import contributions as route_contributions
 
 
 def time_split(df: pd.DataFrame, valid_frac: float = config.VALID_FRACTION):
@@ -34,22 +37,46 @@ def time_split(df: pd.DataFrame, valid_frac: float = config.VALID_FRACTION):
     return df.iloc[:cut], df.iloc[cut:]
 
 
-FEATURE_SET = "v3.1-known-fraud"
+FEATURE_SET = "v5-routed"
 
 
-def segment_metrics(fb: FeatureBuilder, valid_df: pd.DataFrame, y_va, scores) -> dict:
-    """Metrics for customers seen in training vs. new customers (the EDA found new ones riskier)."""
-    uid = make_uid(valid_df)
-    seen_idx = fb.history.get("uid", pd.DataFrame()).index
-    segs = {"seen_customer": uid.isin(seen_idx).fillna(False).to_numpy(dtype=bool)}
-    segs["new_customer"] = ~segs["seen_customer"]
+def segment_masks(fb: FeatureBuilder, valid_df: pd.DataFrame, X_va: pd.DataFrame | None = None):
+    """Two ways to slice validation:
+    - seen vs. new: is the customer in the training history?
+    - by what's knowable when the transaction arrives (needs the features):
+        prior_known_fraud  customer has a fraud confirmed at least LABEL_DELAY_DAYS ago
+        prior_known_legit  customer has confirmed history, all legit
+        no_prior_info      no confirmed labels yet (new customers, or history too recent)
+      plus excluding_known_fraud: everything but the first group. Vesta labels every later
+      transaction of a fraud account as fraud, so prior_known_fraud is near-trivial; this is
+      the honest measure of detection skill.
+    """
+    seen = fb.seen_mask(valid_df)
+    segs = {"seen_customer": seen, "new_customer": ~seen}
+    if X_va is not None and {"uid_known_fraud", "uid_known_n"} <= set(X_va.columns):
+        kf = X_va["uid_known_fraud"].fillna(0).to_numpy() > 0
+        kn = X_va["uid_known_n"].fillna(0).to_numpy() > 0
+        segs.update({
+            "prior_known_fraud": kf,
+            "prior_known_legit": kn & ~kf,
+            "no_prior_info": ~kn,
+            "excluding_known_fraud": ~kf,
+        })
+    return segs
+
+
+def segment_metrics(fb: FeatureBuilder, valid_df: pd.DataFrame, y_va, scores,
+                    X_va: pd.DataFrame | None = None) -> dict:
     out = {}
-    for name, mask in segs.items():
+    for name, mask in segment_masks(fb, valid_df, X_va).items():
         y = np.asarray(y_va)[mask]
         if mask.sum() and 0 < y.sum() < len(y):
             m = evaluate(y, np.asarray(scores)[mask])
             out[name] = {"share": round(float(mask.mean()), 4),
                          **{k: m[k] for k in ("pr_auc", "roc_auc", "base_rate")}}
+        elif mask.sum():
+            out[name] = {"share": round(float(mask.mean()), 4),
+                         "base_rate": round(float(y.mean()), 4)}
     return out
 
 
@@ -116,10 +143,20 @@ def train(df: pd.DataFrame, data_source: str) -> dict:
     X_va, y_va = fb.transform(valid_df), valid_df[config.TARGET]
 
     model, best_iter, n_trees = fit_model(X_all, y_all, config.RANDOM_STATE)
+    routing = None
+    if config.ROUTE_NEW and config.ROUTE_NEW != "none":
+        if config.ROUTE_NEW != "catnum":
+            raise SystemExit(f"Unsupported ROUTE_NEW={config.ROUTE_NEW!r}; use 'catnum' or 'none'")
+        encoder = CatNumEncoder().fit(X_all, list(fb.categorical))
+        new_model, new_best, new_trees = fit_model(encoder.transform(X_all), y_all,
+                                                   config.RANDOM_STATE)
+        model = RoutedModel(model, new_model, encoder)
+        routing = {"new_customers": "catnum", "base_trees": n_trees, "new_trees": new_trees,
+                   "new_best_iteration": new_best}
 
-    scores = model.predict_proba(X_va)[:, 1]
+    scores = predict(model, fb, valid_df, X_va)
     metrics = evaluate(y_va, scores)
-    segments = segment_metrics(fb, valid_df, y_va, scores)
+    segments = segment_metrics(fb, valid_df, y_va, scores, X_va)
 
     # Business layer: outcomes by review budget and the cost-optimal operating point.
     amounts = valid_df.get("TransactionAmt", pd.Series(0.0, index=valid_df.index))
@@ -132,15 +169,17 @@ def train(df: pd.DataFrame, data_source: str) -> dict:
         a = X_va["anomaly_score"].to_numpy()
         anomaly_only = {
             "overall": {k: evaluate(y_va, a)[k] for k in ("pr_auc", "roc_auc")},
-            **segment_metrics(fb, valid_df, y_va, a),
+            **segment_metrics(fb, valid_df, y_va, a, X_va),
         }
 
     # Global SHAP importance on a sample of validation transactions.
-    sample = X_va.sample(min(len(X_va), 5000), random_state=config.RANDOM_STATE)
-    shap_importance = global_importance(contributions(model, sample))
+    sample_idx = X_va.sample(min(len(X_va), 5000), random_state=config.RANDOM_STATE).index
+    shap_importance = global_importance(
+        route_contributions(model, fb, valid_df.loc[sample_idx], X_va.loc[sample_idx]))
 
     metadata = {
-        "model_type": "LightGBM",
+        "model_type": "LightGBM (routed: new customers -> catnum)" if routing else "LightGBM",
+        "routing": routing,
         "trained_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "data_source": data_source,
         "n_train": len(train_df),
@@ -162,10 +201,20 @@ def train(df: pd.DataFrame, data_source: str) -> dict:
         "pr_curve": pr_curve_points(y_va, scores),
     }
 
+    # Review-queue examples. Their feature rows are saved as scored here, in context: a customer's
+    # earlier transactions in the period shape features like prior count and time since last
+    # purchase, which re-scoring one transaction alone in the API can't reproduce.
+    examples = pick_examples(valid_df, scores, operating["threshold"])
+    by_id = pd.Index(valid_df[config.ID_COL])
+    rows = by_id.get_indexer(examples[config.ID_COL])
+    example_features = X_va.iloc[rows].set_axis(examples[config.ID_COL].to_numpy())
+    example_seen = pd.Series(fb.seen_mask(valid_df)[rows], index=example_features.index)
+
     config.MODEL_DIR.mkdir(parents=True, exist_ok=True)
-    joblib.dump({"model": model, "features": fb}, config.MODEL_PATH)
+    joblib.dump({"model": model, "features": fb, "example_features": example_features,
+                 "example_seen": example_seen}, config.MODEL_PATH)
     config.METADATA_PATH.write_text(json.dumps(metadata, indent=2))
-    pick_examples(valid_df, scores, operating["threshold"]).to_parquet(config.EXAMPLES_PATH)
+    examples.to_parquet(config.EXAMPLES_PATH)
     return metadata
 
 
@@ -181,7 +230,7 @@ def main() -> None:
         df, source = load_raw(nrows=args.nrows), "ieee-cis"
 
     meta = train(df, source)
-    keys = ("feature_groups", "seed", "metrics", "segments", "anomaly_only", "operating_point")
+    keys = ("feature_set", "routing", "seed", "metrics", "segments", "operating_point")
     print(json.dumps({k: meta[k] for k in keys}, indent=2))
     print(f"Saved model to {config.MODEL_PATH}")
 

@@ -243,6 +243,11 @@ class FeatureBuilder:
         self.fit_transform(df)
         return self
 
+    def seen_mask(self, df: pd.DataFrame) -> np.ndarray:
+        """True where the transaction's customer appears in the training history."""
+        idx = self.history.get("uid", pd.DataFrame()).index
+        return make_uid(df).isin(idx).fillna(False).to_numpy(dtype=bool)
+
     def transform(self, df: pd.DataFrame) -> pd.DataFrame:
         """Inference: uses the history saved from training (does not update it)."""
         return self._finalize(self._engineer(df))

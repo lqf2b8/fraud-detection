@@ -108,7 +108,7 @@ description, for example *"Confirmed prior frauds on this customer = 2 (+2.1)"*.
 ## Repo layout
 
 ```
-src/fraud_detection/   shared library: config, data, features, network, anomaly, explain, train, evaluate
+src/fraud_detection/   shared library: config, data, features, routing, preprocess, network, velocity, anomaly, explain, train, evaluate, experiment, diagnose
 services/trainer/      training job image
 services/api/          FastAPI service
 services/dashboard/    Plotly Dash app
@@ -125,7 +125,8 @@ tests/                 unit + API tests (run on synthetic data)
 - **Known-fraud history with a reporting delay:** for each customer, card, email + address and device, the model sees how many of its earlier transactions were confirmed fraud. It only counts labels at least `LABEL_DELAY_DAYS` (default 30) old, which mimics chargeback lag. A transaction never sees its own label or any label too recent to have been reported yet. Tests check this.
 - **Shared-attribute network (v3):** customers link to the devices, email + address pairs and card fingerprints they use. For each transaction, the model sees how many *other* customers used the same attribute before, and how many of them were already confirmed fraudsters (same 30-day label delay; a customer's own fraud is excluded). A brand-new customer can still be linked to a known fraud ring through a shared device or card.
 - **Unsupervised anomaly score (v3):** an Isolation Forest fit on all training transactions without labels. (Fitting on legit transactions only would leak labels into the training set.) It's used as a model feature and also reported on its own.
-- **Segments:** metrics are also reported for customers seen in training vs. new customers. The EDA found new customers 2.3× riskier.
+- **Segments:** metrics are reported for customers seen in training vs. new customers (the EDA found new customers 2.3× riskier), and by what is knowable when a transaction arrives: *prior known fraud*, *prior known legit*, and *no prior info*. Vesta labels every later transaction of a fraud account as fraud, so the prior-known-fraud group is near-trivial; *all except prior known fraud* is the honest measure of detection skill.
+- **Routing (v5):** new customers are scored by a second model whose categoricals are label-encoded with rare values grouped (`ROUTE_NEW=catnum`, the default; `ROUTE_NEW=none` for a single model). SHAP reasons come from whichever model scored the transaction.
 - **No validation leakage in model selection:** early stopping uses the last 10% of the *training* period, so the validation set is only ever used for reporting. The raw timestamp is excluded as a feature; hour and day of week are kept.
 - **Threshold:** the cost-optimal threshold is stored with the model, and it can be overridden per request (`/predict?threshold=0.3`).
 
@@ -184,7 +185,6 @@ dashboard lets you change it, and the best threshold moves accordingly.
   base rate; ROC AUC 0.73), but adds nothing once the supervised model sees the same C/D columns.
 
 **Decision:** both groups stay in the code (`FEATURE_GROUPS=network,anomaly`) but are **off by default**.
-The served model is v2.2's feature set (v3.1 below).
 
 **v4: velocity features, multi-seed evaluation and diagnostics.** Single runs turned out to be too coarse,
 so comparisons now use `make experiment` (features built once, 5 seeds, mean ± sd) and `make diagnose`
@@ -198,6 +198,10 @@ so comparisons now use `make experiment` (features built once, 5 seeds, mean ± 
 | Routed: separate new-customer model trained on first transactions only | 0.647 ± 0.003 | 0.917 ± 0.004 | 0.543 ± 0.004 |
 | Recency-weighted training, half-life 30 days | 0.655 ± 0.003 | 0.923 ± 0.007 | 0.548 ± 0.002 |
 | Recency-weighted training, half-life 90 days | 0.653 ± 0.004 | 0.906 ± 0.007 | 0.557 ± 0.001 |
+| Categoricals as numbers, rare values grouped (`catnum`) | 0.658 ± 0.007 | 0.907 ± 0.016 | 0.566 ± 0.002 |
+| `catnum` + D columns detrended (`dnorm`) | 0.653 ± 0.004 | 0.895 ± 0.010 | 0.565 ± 0.001 |
+| `dnorm` + missing values as −999 (`nan999`) | 0.661 ± 0.008 | 0.919 ± 0.016 | 0.561 ± 0.004 |
+| **v5: routed (seen → baseline model, new → `catnum` model)** | **0.663 ± 0.003** | **0.917 ± 0.004** | **0.566 ± 0.002** |
 
 - The baseline is stable (seen-customer sd 0.004), so the earlier single-run drops were real, not noise.
 - **Diagnosed:** device-keyed velocity drifted between late training and validation (PSI up to 0.75; the
@@ -211,6 +215,13 @@ so comparisons now use `make experiment` (features built once, 5 seeds, mean ± 
   new customers than the model trained on everything (−0.016). Repeat transactions teach merchant, amount and
   device patterns that carry over to first-time customers, so restricting the training set loses more than it
   gains. Seen customers were unchanged (same model), which confirms the routing itself was correct.
+- **Encoding is what finally moved new customers.** Treating categoricals (device, email domain, ...) as
+  numbers, with values seen in fewer than 0.1% of training rows grouped together, lifted new customers on
+  all 5 seeds (+0.008), from ideas in Chris Deotte's IEEE-CIS feature-engineering guide. It hurt returning
+  customers, though: for them the exact device or email *is* part of their identity.
+- **v5 routes each transaction to the encoding that suits it.** Both models train on all the data; the
+  baseline model scores customers in the training history and the `catnum` model scores new ones. Overall
+  PR AUC improves on every seed (+0.003 to +0.007), and seen customers are unchanged.
 - **Recency weighting:** favoring recent transactions hurt new customers (−0.011 at a 30-day half-life), the same
   lesson as routing. What carries over to first-time customers is broad, long-running behavior, so they
   benefit from all of the history, not just the latest weeks.
@@ -237,6 +248,7 @@ likely be smaller than shown here.
 - [ ] Conformal prediction: approve / decline / manual review based on prediction-set uncertainty
 - [x] Cost-based threshold selection (expected loss vs. review cost) with review-capacity constraint
 - [x] SHAP explanations returned by the API and shown in the dashboard
+- [x] v5: segment routing (new customers scored with rare-value-grouped categoricals)
 - [ ] Drift monitoring on score and feature distributions
 - [ ] Model card documenting assumptions, limitations and performance
 

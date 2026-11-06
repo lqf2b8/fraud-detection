@@ -27,7 +27,8 @@ from app.schemas import (
     PredictRequest,
     PredictResponse,
 )
-from fraud_detection.explain import contributions, top_reasons
+from fraud_detection import routing
+from fraud_detection.explain import top_reasons
 
 MODEL_DIR = Path(os.getenv("MODEL_DIR", "models"))
 STATE: dict = {}
@@ -61,11 +62,12 @@ def _require_model() -> None:
 
 
 def _score(df: pd.DataFrame, threshold: float | None, explain: bool) -> PredictResponse:
-    X = STATE["features"].transform(df)
-    model = STATE["model"]
-    probs = model.predict_proba(X)[:, 1]
+    fb, model = STATE["features"], STATE["model"]
+    X = fb.transform(df)
+    probs = routing.predict(model, fb, df, X)
     thr = threshold if threshold is not None else STATE["metadata"].get("threshold", 0.5)
-    reasons = top_reasons(contributions(model, X), X) if explain else [None] * len(df)
+    # Reasons use the scoring model's SHAP values, shown with the original (readable) values.
+    reasons = top_reasons(routing.contributions(model, fb, df, X), X) if explain else [None] * len(df)
     ids = df["TransactionID"].tolist() if "TransactionID" in df else [None] * len(df)
     return PredictResponse(
         threshold=thr,
@@ -79,6 +81,18 @@ def _score(df: pd.DataFrame, threshold: float | None, explain: bool) -> PredictR
             for i, p, r in zip(ids, probs, reasons)
         ],
     )
+
+
+def _score_features(X: pd.DataFrame, seen, ids) -> PredictResponse:
+    """Score precomputed feature rows (review-queue examples, as scored in training)."""
+    model = STATE["model"]
+    probs = routing.predict_with_seen(model, X, seen)
+    thr = STATE["metadata"].get("threshold", 0.5)
+    reasons = top_reasons(routing.contributions_with_seen(model, X, seen), X)
+    return PredictResponse(threshold=thr, predictions=[
+        Prediction(TransactionID=int(i), fraud_probability=round(float(p), 6),
+                   flagged=bool(p >= thr), reasons=r)
+        for i, p, r in zip(ids, probs, reasons)])
 
 
 @app.get("/health")
@@ -135,7 +149,12 @@ def example_detail(transaction_id: int) -> ExampleDetail:
     if ex is None or transaction_id not in ex.index:
         raise HTTPException(404, f"Example {transaction_id} not found")
     row = ex.loc[[transaction_id]]
-    pred = _score(row.drop(columns=["isFraud", "outcome", "score"]), None, explain=True)
+    if "example_features" in STATE and transaction_id in STATE["example_features"].index:
+        pred = _score_features(STATE["example_features"].loc[[transaction_id]],
+                               STATE["example_seen"].loc[[transaction_id]].to_numpy(),
+                               [transaction_id])
+    else:  # models trained before in-context examples were saved
+        pred = _score(row.drop(columns=["isFraud", "outcome", "score"]), None, explain=True)
     raw = row.iloc[0].drop(["isFraud", "outcome", "score"])
     shown = ["TransactionAmt", "ProductCD", "card4", "card6", "P_emaildomain", "DeviceType", "DeviceInfo"]
     return ExampleDetail(
