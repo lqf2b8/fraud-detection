@@ -33,7 +33,7 @@ def time_split(df: pd.DataFrame, valid_frac: float = config.VALID_FRACTION):
     return df.iloc[:cut], df.iloc[cut:]
 
 
-FEATURE_SET = "v2.2-known-fraud"
+FEATURE_SET = "v3-network-anomaly"
 
 
 def segment_metrics(fb: FeatureBuilder, valid_df: pd.DataFrame, y_va, scores) -> dict:
@@ -117,7 +117,16 @@ def train(df: pd.DataFrame, data_source: str) -> dict:
     # Business layer: outcomes by review budget and the cost-optimal operating point.
     amounts = valid_df.get("TransactionAmt", pd.Series(0.0, index=valid_df.index))
     thresholds = threshold_table(y_va, scores, amounts)
-    operating = cost_optimal_point(thresholds, config.REVIEW_COST_USD)
+    operating = cost_optimal_point(thresholds, config.REVIEW_COST_USD, config.FALSE_POSITIVE_COST_USD)
+
+    # How well does "unusual" alone find fraud? Reported overall and for seen vs. new customers.
+    anomaly_only = None
+    if "anomaly_score" in X_va:
+        a = X_va["anomaly_score"].to_numpy()
+        anomaly_only = {
+            "overall": {k: evaluate(y_va, a)[k] for k in ("pr_auc", "roc_auc")},
+            **segment_metrics(fb, valid_df, y_va, a),
+        }
 
     # Global SHAP importance on a sample of validation transactions.
     sample = X_va.sample(min(len(X_va), 5000), random_state=config.RANDOM_STATE)
@@ -135,6 +144,7 @@ def train(df: pd.DataFrame, data_source: str) -> dict:
         "label_delay_days": config.LABEL_DELAY_DAYS,
         "metrics": metrics,
         "segments": segments,
+        "anomaly_only": anomaly_only,
         "operating_point": operating,
         "threshold": operating["threshold"],
         "threshold_table": thresholds,
@@ -162,7 +172,8 @@ def main() -> None:
         df, source = load_raw(nrows=args.nrows), "ieee-cis"
 
     meta = train(df, source)
-    print(json.dumps({k: meta[k] for k in ("metrics", "segments", "operating_point")}, indent=2))
+    keys = ("metrics", "segments", "anomaly_only", "operating_point")
+    print(json.dumps({k: meta[k] for k in keys}, indent=2))
     print(f"Saved model to {config.MODEL_PATH}")
 
 

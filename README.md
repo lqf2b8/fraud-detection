@@ -63,10 +63,11 @@ description, for example *"Confirmed prior frauds on this customer = 2 (+2.1)"*.
 
 ## Business layer
 
-- **Cost-based threshold:** cost = review cost × transactions flagged + fraud dollars missed. Training picks the
-  cheapest threshold for an assumed `REVIEW_COST_USD` (default $10), and the API uses it by default.
+- **Cost-based threshold:** cost = review cost × transactions flagged + customer friction × false alarms + fraud
+  dollars missed. Training picks the cheapest threshold for the assumed `REVIEW_COST_USD` (default $10) and
+  `FALSE_POSITIVE_COST_USD` (default $0), and the API uses it by default.
 - **Review capacity:** in the dashboard's *Threshold & cost* tab, set the review cost and the team's capacity
-  (max % flagged). It shows the cheapest feasible threshold, with frauds caught, fraud dollars caught and savings
+  (max % flagged), plus the friction cost of a false alarm. It shows the cheapest feasible threshold, with frauds caught, fraud dollars caught and savings
   compared with no model.
 - **Explanations:** exact TreeSHAP values computed natively by LightGBM (`pred_contrib`), with no extra dependency.
   For each transaction they add up to the model's score. Shown in the review queue and returned by the API.
@@ -74,7 +75,7 @@ description, for example *"Confirmed prior frauds on this customer = 2 (+2.1)"*.
 ## Repo layout
 
 ```
-src/fraud_detection/   shared library: config, data, features, train, evaluate
+src/fraud_detection/   shared library: config, data, features, network, anomaly, explain, train, evaluate
 services/trainer/      training job image
 services/api/          FastAPI service
 services/dashboard/    Plotly Dash app
@@ -89,6 +90,8 @@ tests/                 unit + API tests (run on synthetic data)
 - **Metrics:** PR AUC and precision at the top 1% and 5% of scores (a fixed review capacity), not just ROC AUC.
 - **Entity features are past-only:** each transaction sees only earlier transactions, both in training and at inference, so validation reflects what a live system would know.
 - **Known-fraud history with a reporting delay:** for each customer, card, email + address and device, the model sees how many of its earlier transactions were confirmed fraud. It only counts labels at least `LABEL_DELAY_DAYS` (default 30) old, which mimics chargeback lag. A transaction never sees its own label or any label too recent to have been reported yet. Tests check this.
+- **Shared-attribute network (v3):** customers link to the devices, email + address pairs and card fingerprints they use. For each transaction, the model sees how many *other* customers used the same attribute before, and how many of them were already confirmed fraudsters (same 30-day label delay; a customer's own fraud is excluded). A brand-new customer can still be linked to a known fraud ring through a shared device or card.
+- **Unsupervised anomaly score (v3):** an Isolation Forest fit on all training transactions without labels. (Fitting on legit transactions only would leak labels into the training set.) It's used as a model feature and also reported on its own.
 - **Segments:** metrics are also reported for customers seen in training vs. new customers. The EDA found new customers 2.3× riskier.
 - **No validation leakage in model selection:** early stopping uses the last 10% of the *training* period, so the validation set is only ever used for reporting. The raw timestamp is excluded as a feature; hour and day of week are kept.
 - **Threshold:** the cost-optimal threshold is stored with the model, and it can be overridden per request (`/predict?threshold=0.3`).
@@ -141,8 +144,9 @@ likely be smaller than shown here.
 - [x] Entity resolution: pseudo-customer UID (card1 + addr1 + email + account start day) with past-only aggregates (prior count, typical amount, amount ratio, time since last transaction)
 - [x] Known-fraud history per customer / card / email + address / device, with a 30-day label delay
 - [ ] Velocity and behavioral features (counts and amounts per entity over time windows)
-- [ ] Unsupervised anomaly score (Isolation Forest) as a complementary signal, aimed at new customers
-- [ ] Graph features: connected components / proximity to known fraud over shared cards, devices, emails
+- [x] Unsupervised anomaly score (Isolation Forest) as a complementary signal, aimed at new customers
+- [x] Network features: other customers and known fraudsters sharing a device, email + address or card fingerprint
+- [ ] Multi-hop graph features (connected components, fraud-ring size) and graph embeddings
 - [ ] Conformal prediction: approve / decline / manual review based on prediction-set uncertainty
 - [x] Cost-based threshold selection (expected loss vs. review cost) with review-capacity constraint
 - [x] SHAP explanations returned by the API and shown in the dashboard

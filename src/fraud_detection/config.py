@@ -26,8 +26,11 @@ RANDOM_STATE = 42
 LABEL_DELAY_DAYS = float(os.getenv("LABEL_DELAY_DAYS", "30"))
 
 # Business assumptions for threshold selection (adjustable in the dashboard).
-# Cost of operating at a threshold = REVIEW_COST_USD × flagged transactions + $ of fraud missed.
+# Cost at a threshold = REVIEW_COST_USD × flagged + FALSE_POSITIVE_COST_USD × false alarms
+#                      + $ of fraud missed.
 REVIEW_COST_USD = float(os.getenv("REVIEW_COST_USD", "10"))
+# Customer friction per false alarm (delayed or declined good customer). 0 = review cost only.
+FALSE_POSITIVE_COST_USD = float(os.getenv("FALSE_POSITIVE_COST_USD", "0"))
 
 # Fraction of the training period held out for early stopping, so validation stays untouched.
 EARLY_STOP_FRACTION = float(os.getenv("EARLY_STOP_FRACTION", "0.1"))

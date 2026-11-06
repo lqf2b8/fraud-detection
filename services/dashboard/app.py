@@ -198,24 +198,30 @@ def cost_tab():
     if "threshold_table" not in meta:
         return dbc.Alert("Retrain with the latest trainer to enable cost analysis.", color="info")
     default_cost = meta["operating_point"]["review_cost_usd"]
+    default_fp = meta["operating_point"].get("false_positive_cost_usd", 0)
     return html.Div(
         [
             html.P(
-                "Every flagged transaction costs an analyst review; every missed fraud costs its "
-                "dollar amount. Set your assumptions and the review team's capacity, and the "
-                "dashboard picks the cheapest threshold within that capacity.",
+                "Every flagged transaction costs an analyst review, every false alarm can also "
+                "cost customer friction, and every missed fraud costs its dollar amount. Set your "
+                "assumptions and the review team's capacity, and the dashboard picks the cheapest "
+                "threshold within that capacity.",
                 className="text-muted",
             ),
             dbc.Row(
                 [
                     dbc.Col([dbc.Label("Cost per manual review ($)"),
                              dcc.Slider(1, 50, 1, value=default_cost, id="review-cost",
-                                        marks={i: f"${i}" for i in (1, 5, 10, 20, 30, 40, 50)},
-                                        tooltip={"placement": "bottom"})], md=6),
-                    dbc.Col([dbc.Label("Review capacity (max % of transactions flagged)"),
+                                        marks={i: f"${i}" for i in (1, 10, 20, 30, 40, 50)},
+                                        tooltip={"placement": "bottom"})], md=4),
+                    dbc.Col([dbc.Label("Customer friction per false alarm ($)"),
+                             dcc.Slider(0, 100, 5, value=default_fp, id="fp-cost",
+                                        marks={i: f"${i}" for i in (0, 25, 50, 75, 100)},
+                                        tooltip={"placement": "bottom"})], md=4),
+                    dbc.Col([dbc.Label("Review capacity (max % flagged)"),
                              dcc.Slider(0.5, 30, 0.5, value=30, id="capacity",
                                         marks={i: f"{i}%" for i in (1, 5, 10, 20, 30)},
-                                        tooltip={"placement": "bottom"})], md=6),
+                                        tooltip={"placement": "bottom"})], md=4),
                 ],
                 className="mb-3",
             ),
@@ -230,14 +236,17 @@ def cost_tab():
     Output("cost-cards", "children"),
     Output("cost-chart", "figure"),
     Input("review-cost", "value"),
+    Input("fp-cost", "value"),
     Input("capacity", "value"),
 )
-def update_cost(review_cost, capacity):
+def update_cost(review_cost, fp_cost, capacity):
     meta = get_meta()
     t = meta["threshold_table"]
     flag = np.array(t["flag_rate"])
     caught_amt = np.array(t["fraud_amt_caught"])
-    cost = review_cost * np.array(t["n_flagged"]) + (t["fraud_amt_total"] - caught_amt)
+    fps = np.array(t.get("false_positives", np.array(t["n_flagged"]) - np.array(t["frauds_caught"])))
+    friction = (fp_cost or 0) * fps
+    cost = review_cost * np.array(t["n_flagged"]) + friction + (t["fraud_amt_total"] - caught_amt)
     allowed = flag <= capacity / 100
     i = int(np.argmin(np.where(allowed, cost, np.inf)))
     no_model_cost = t["fraud_amt_total"]
@@ -261,6 +270,9 @@ def update_cost(review_cost, capacity):
                              hovertemplate="flag %{x:.1f}%<br>cost $%{y:,.0f}<extra></extra>"))
     fig.add_trace(go.Scatter(x=flag * 100, y=review_cost * np.array(t["n_flagged"]), name="Review cost",
                              line={"color": GREY, "dash": "dot"}))
+    if fp_cost:
+        fig.add_trace(go.Scatter(x=flag * 100, y=friction, name="False-alarm friction",
+                                 line={"color": "#e67e22", "dash": "dashdot"}))
     fig.add_trace(go.Scatter(x=flag * 100, y=t["fraud_amt_total"] - caught_amt, name="Fraud $ missed",
                              line={"color": GREY, "dash": "dash"}))
     fig.add_trace(go.Scatter(x=[flag[i] * 100], y=[cost[i]], mode="markers", name="Chosen point",
@@ -358,6 +370,11 @@ def performance_tab():
                  html.Td(f"{v['pr_auc']:.3f}"), html.Td(f"{v['roc_auc']:.3f}")])
         for k, v in seg.items()
     ]
+    an = meta.get("anomaly_only") or {}
+    if an:
+        seg_rows.append(html.Tr([html.Td(html.I("anomaly score alone, new customers")), html.Td("—"),
+                                 html.Td("—"), html.Td(f"{an.get('new_customer', {}).get('pr_auc', float('nan')):.3f}"),
+                                 html.Td(f"{an.get('new_customer', {}).get('roc_auc', float('nan')):.3f}")]))
     seg_table = dbc.Table(
         [html.Thead(html.Tr([html.Th(h) for h in ["Segment", "Share", "Fraud rate", "PR AUC", "ROC AUC"]])),
          html.Tbody(seg_rows)], bordered=False, size="sm", className="mb-3",

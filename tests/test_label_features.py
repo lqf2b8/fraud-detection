@@ -1,7 +1,8 @@
 import numpy as np
 import pandas as pd
 
-from fraud_detection.features import FeatureBuilder, known_label_counts
+from fraud_detection.counting import known_label_counts
+from fraud_detection.features import FeatureBuilder
 
 DAY = 86_400
 

@@ -29,7 +29,11 @@ _EXACT = {
     "R_emaildomain": "Recipient email domain",
     "DeviceType": "Device type",
     "DeviceInfo": "Device / OS",
+    "anomaly_score": "Anomaly score (Isolation Forest)",
+    "net_fraud_neighbors_total": "Known fraudsters sharing this device, card or email + address",
+    "net_max_shared_customers": "Most other customers sharing any one of its attributes",
 }
+_NET = {"device": "device", "email_addr": "email + address", "card_full": "card fingerprint"}
 
 _ENTITY = {"uid": "customer", "card1": "card", "email_addr": "email + address", "device": "device"}
 _STAT = {
@@ -50,6 +54,12 @@ _PREFIX = {
 def describe(feature: str) -> str:
     if feature in _EXACT:
         return _EXACT[feature]
+    m = re.fullmatch(r"net_(device|email_addr|card_full)_(customers|fraud_customers|fraud_share)", feature)
+    if m:
+        what = {"customers": "Other customers using this {a}",
+                "fraud_customers": "Known fraudsters using this {a}",
+                "fraud_share": "Share of other customers on this {a} who are known fraudsters"}[m.group(2)]
+        return what.format(a=_NET[m.group(1)])
     for ent, ent_name in _ENTITY.items():
         if feature.startswith(ent + "_"):
             stat = feature[len(ent) + 1:]

@@ -20,6 +20,9 @@ chargeback lag. A transaction never sees its own label, or any label too recent 
 reported yet. Entities like device and email + address can carry risk even for a brand-new
 customer.
 
+v3 adds **shared-attribute network features** (see network.py) and an unsupervised
+**Isolation Forest anomaly score** (see anomaly.py). Both are aimed at new customers.
+
 The saved history is frozen at training time. In production it would live in a feature store
 updated as transactions and chargebacks arrive.
 """
@@ -30,6 +33,9 @@ import numpy as np
 import pandas as pd
 
 from fraud_detection import config
+from fraud_detection.anomaly import AnomalyScorer
+from fraud_detection.counting import known_label_counts
+from fraud_detection.network import build_events, network_features
 
 # The raw timestamp is excluded: with a time-based split every validation timestamp lies beyond the
 # training range, so the model can't learn anything from it that carries over. Hour and day of
@@ -72,33 +78,6 @@ def _label_entity_keys(df: pd.DataFrame) -> dict[str, pd.Series]:
     return keys
 
 
-def known_label_counts(hist_key, hist_t, hist_y, q_key, q_t, delay_secs: float):
-    """For each query (key, time), count history rows with the same key whose time is at most
-    time - delay, and how many of those were fraud. Vectorized with one sort + searchsorted."""
-    hist_key, q_key = pd.Series(hist_key).reset_index(drop=True), pd.Series(q_key).reset_index(drop=True)
-    codes, _ = pd.factorize(pd.concat([hist_key, q_key], ignore_index=True), use_na_sentinel=True)
-    hk, qk = codes[: len(hist_key)], codes[len(hist_key):]
-    h_ok = hk >= 0
-    hk, ht, hy = hk[h_ok], np.asarray(hist_t, float)[h_ok], np.asarray(hist_y, float)[h_ok]
-
-    span = max(ht.max(initial=0), np.nanmax(np.asarray(q_t, float), initial=0)) + delay_secs + 1
-    order = np.lexsort((ht, hk))
-    v = hk[order] * span + ht[order]
-    cum_fraud = np.concatenate([[0.0], np.cumsum(hy[order])])
-
-    q_ok = (qk >= 0) & ~np.isnan(np.asarray(q_t, float))
-    qkk, qt = qk[q_ok].astype(float), np.asarray(q_t, float)[q_ok]
-    start = np.searchsorted(v, qkk * span, side="left")
-    end = np.searchsorted(v, qkk * span + (qt - delay_secs), side="right")
-    end = np.maximum(end, start)  # (qt - delay) can fall before the group's first row
-
-    n = np.full(len(q_key), np.nan)
-    f = np.full(len(q_key), np.nan)
-    n[q_ok] = end - start
-    f[q_ok] = cum_fraud[end] - cum_fraud[start]
-    return n, f
-
-
 class FeatureBuilder:
     def __init__(self) -> None:
         self.feature_names: list[str] = []
@@ -108,6 +87,8 @@ class FeatureBuilder:
         # Labeled training transactions per entity (key, time, label) for known-fraud features
         self.label_history: dict[str, pd.DataFrame] = {}
         self.label_delay_days = config.LABEL_DELAY_DAYS
+        self.network_events: dict = {}
+        self.anomaly = None
 
     # ------------------------------------------------------------------ basic features
     @staticmethod
@@ -185,7 +166,8 @@ class FeatureBuilder:
             return
         for name, key in _label_entity_keys(df).items():
             h = pd.DataFrame({"k": key, "t": df[config.TIME_COL], "y": df[config.TARGET]})
-            self.label_history[name] = h.dropna(subset=["k"]).reset_index(drop=True)
+            h = h.dropna(subset=["k"]).reset_index(drop=True)
+            self.label_history[name] = h.astype({"k": "category", "y": "int8"})
 
     def _update_history(self, df: pd.DataFrame) -> None:
         if config.TIME_COL not in df:
@@ -207,9 +189,19 @@ class FeatureBuilder:
             self.history[name] = agg
 
     # ------------------------------------------------------------------ public API
+    def _extra_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        parts = []
+        if getattr(self, "network_events", None):
+            parts.append(network_features(df, make_uid(df), self.network_events))
+        if getattr(self, "anomaly", None) is not None:
+            parts.append(self.anomaly.score(df).rename("anomaly_score").to_frame())
+        return pd.concat(parts, axis=1) if parts else pd.DataFrame(index=df.index)
+
     def _engineer(self, df: pd.DataFrame) -> pd.DataFrame:
         return pd.concat(
-            [self._basic(df), self._entity_features(df), self._label_features(df)], axis=1
+            [self._basic(df), self._entity_features(df), self._label_features(df),
+             self._extra_features(df)],
+            axis=1,
         )
 
     def fit_transform(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -218,6 +210,9 @@ class FeatureBuilder:
         # Labels from the training data itself; the delay ensures a row only sees labels of
         # transactions at least LABEL_DELAY_DAYS older than itself (never its own).
         self._set_label_history(df)
+        if config.TARGET in df and config.TIME_COL in df:
+            self.network_events = build_events(df, make_uid(df), self.label_delay_days)
+        self.anomaly = AnomalyScorer().fit(df.drop(columns=[config.TARGET], errors="ignore"))
         X = self._engineer(df)
         cols = [c for c in X.columns if c not in DROP_COLS]
         self.categorical = {

@@ -34,3 +34,10 @@ def test_describe():
     assert describe("email_addr_known_fraud_rate") == "Confirmed fraud rate on this email + address"
     assert describe("V258") == "Vesta engineered feature V258"
     assert describe("card1_amt_ratio") == "Amount vs. this card's typical amount"
+
+
+def test_friction_cost_pushes_threshold_up():
+    t, *_ = _table()
+    no_friction, friction = cost_optimal_point(t, 5.0, 0.0), cost_optimal_point(t, 5.0, 50.0)
+    assert friction["flag_rate"] <= no_friction["flag_rate"]
+    assert describe("net_device_fraud_customers") == "Known fraudsters using this device"

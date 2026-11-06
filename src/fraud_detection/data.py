@@ -41,6 +41,7 @@ def make_synthetic(n: int = 20_000, fraud_rate: float = 0.035, seed: int = 0) ->
             "TransactionAmt": amt,
             "ProductCD": rng.choice(["W", "C", "R", "H", "S"], size=n, p=[0.74, 0.12, 0.06, 0.06, 0.02]),
             "card1": rng.integers(1000, 18_000, size=n),
+            "card2": rng.integers(100, 600, size=n).astype(float),
             "card4": rng.choice(["visa", "mastercard", "american express", "discover"], size=n),
             "card6": rng.choice(["debit", "credit"], size=n, p=[0.75, 0.25]),
             "addr1": rng.integers(100, 540, size=n).astype(float),
@@ -48,6 +49,8 @@ def make_synthetic(n: int = 20_000, fraud_rate: float = 0.035, seed: int = 0) ->
                 ["gmail.com", "yahoo.com", "hotmail.com", "anonymous.com", "outlook.com"], size=n
             ),
             "DeviceType": rng.choice(["desktop", "mobile", None], size=n, p=[0.15, 0.1, 0.75]),
+            "DeviceInfo": rng.choice(["Windows", "iOS Device", "MacOS", "SM-G9", "Trident/7.0", None],
+                                     size=n, p=[0.1, 0.06, 0.04, 0.02, 0.02, 0.76]),
             "C1": rng.poisson(np.where(is_fraud, 6, 2)).astype(float),
             "D1": np.where(is_fraud, rng.integers(0, 30, n), rng.integers(0, 600, n)).astype(float),
             config.TARGET: is_fraud.astype(int),

@@ -51,6 +51,7 @@ def threshold_table(y_true, scores, amounts, n_points: int = 120) -> dict:
         "flag_rate": (k / n).round(6).tolist(),
         "n_flagged": k.tolist(),
         "frauds_caught": tp.astype(int).tolist(),
+        "false_positives": (k - tp).astype(int).tolist(),
         "precision": (tp / k).round(4).tolist(),
         "recall": (tp / max(total_fraud, 1)).round(4).tolist(),
         "fraud_amt_caught": cum_amt[k - 1].round(2).tolist(),
@@ -60,18 +61,20 @@ def threshold_table(y_true, scores, amounts, n_points: int = 120) -> dict:
     }
 
 
-def operating_cost(table: dict, review_cost: float) -> np.ndarray:
-    """Cost at each grid point = review cost × flagged + fraud $ missed."""
+def operating_cost(table: dict, review_cost: float, fp_cost: float = 0.0) -> np.ndarray:
+    """Cost at each grid point = review cost × flagged + friction × false alarms + fraud $ missed."""
     flagged = np.asarray(table["n_flagged"], dtype=float)
+    fps = np.asarray(table["false_positives"], dtype=float)
     missed = table["fraud_amt_total"] - np.asarray(table["fraud_amt_caught"], dtype=float)
-    return review_cost * flagged + missed
+    return review_cost * flagged + fp_cost * fps + missed
 
 
-def cost_optimal_point(table: dict, review_cost: float) -> dict:
-    cost = operating_cost(table, review_cost)
+def cost_optimal_point(table: dict, review_cost: float, fp_cost: float = 0.0) -> dict:
+    cost = operating_cost(table, review_cost, fp_cost)
     i = int(np.argmin(cost))
     return {
         "review_cost_usd": review_cost,
+        "false_positive_cost_usd": fp_cost,
         "threshold": table["threshold"][i],
         "flag_rate": table["flag_rate"][i],
         "precision": table["precision"][i],
