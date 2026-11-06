@@ -33,7 +33,7 @@ def time_split(df: pd.DataFrame, valid_frac: float = config.VALID_FRACTION):
     return df.iloc[:cut], df.iloc[cut:]
 
 
-FEATURE_SET = "v2.1-known-fraud"
+FEATURE_SET = "v2.2-known-fraud"
 
 
 def segment_metrics(fb: FeatureBuilder, valid_df: pd.DataFrame, y_va, scores) -> dict:
@@ -85,23 +85,30 @@ def train(df: pd.DataFrame, data_source: str) -> dict:
     X_tr, y_tr = X_all.iloc[:es_cut], y_all.iloc[:es_cut]
     X_es, y_es = X_all.iloc[es_cut:], y_all.iloc[es_cut:]
 
-    model = lgb.LGBMClassifier(
-        n_estimators=2000,
-        learning_rate=0.03,
-        num_leaves=64,
-        subsample=0.8,
-        subsample_freq=1,
-        colsample_bytree=0.6,
-        random_state=config.RANDOM_STATE,
-        verbose=-1,
-    )
-    model.fit(
+    params = {
+        "learning_rate": 0.03,
+        "num_leaves": 64,
+        "subsample": 0.8,
+        "subsample_freq": 1,
+        "colsample_bytree": 0.6,
+        "random_state": config.RANDOM_STATE,
+        "verbose": -1,
+    }
+    # 1) Choose the number of trees on the most recent slice of the training period.
+    selector = lgb.LGBMClassifier(n_estimators=2000, **params)
+    selector.fit(
         X_tr,
         y_tr,
         eval_set=[(X_es, y_es)],
         eval_metric="average_precision",
         callbacks=[lgb.early_stopping(100, verbose=False)],
     )
+    best_iter = int(selector.best_iteration_ or selector.n_estimators)
+    # 2) Refit on the full training period (including the most recent weeks), scaling the tree
+    #    count for the extra data. Validation is never used to make any modeling choice.
+    n_trees = max(1, round(best_iter / (1 - config.EARLY_STOP_FRACTION)))
+    model = lgb.LGBMClassifier(n_estimators=n_trees, **params)
+    model.fit(X_all, y_all)
 
     scores = model.predict_proba(X_va)[:, 1]
     metrics = evaluate(y_va, scores)
@@ -122,7 +129,8 @@ def train(df: pd.DataFrame, data_source: str) -> dict:
         "data_source": data_source,
         "n_train": len(train_df),
         "n_features": len(fb.feature_names),
-        "best_iteration": int(model.best_iteration_ or model.n_estimators),
+        "best_iteration": best_iter,
+        "n_trees": n_trees,
         "feature_set": FEATURE_SET,
         "label_delay_days": config.LABEL_DELAY_DAYS,
         "metrics": metrics,

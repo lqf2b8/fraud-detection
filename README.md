@@ -95,6 +95,9 @@ tests/                 unit + API tests (run on synthetic data)
 
 ## Results
 
+v2 was slightly optimistic: early stopping picked the number of trees on the validation set. From v2.1 on,
+validation is used only for reporting.
+
 All results come from the same time-based holdout: the latest 20% of training transactions, 118,108 rows, 3.44% fraud.
 "Fraud caught" is recall at that review budget.
 
@@ -102,7 +105,8 @@ All results come from the same time-based holdout: the latest 20% of training tr
 |---|---|---|---|---|---|---|
 | v0 | Baseline: raw features, LightGBM | 0.588 | 0.923 | 90.6% | 43.4% | ~63% |
 | v1 | + past-only customer (UID) & card history features | 0.592 | 0.925 | 90.4% | 44.0% | ~64% |
-| v2 | + known-fraud history (customer, card, email + address, device), 30-day label delay | **0.659** | **0.941** | **96.3%** | **46.7%** | **~68%** |
+| v2 | + known-fraud history (customer, card, email + address, device), 30-day label delay | 0.659 | 0.941 | 96.3% | 46.7% | ~68% |
+| v2.1 | Stricter evaluation: early stopping off validation, raw timestamp dropped | 0.634 | 0.933 | 94.6% | 44.7% | ~65% |
 
 Random scoring would give a PR AUC of 0.034 (the fraud rate). With v2, reviewing the top 5% of
 transactions by model score catches about 68% of all fraud, and 96% of the top 1% are fraud.
