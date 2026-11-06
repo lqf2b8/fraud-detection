@@ -58,7 +58,7 @@ _WIN = {"1h": "last hour", "1d": "last day", "7d": "last 7 days"}
 def describe(feature: str) -> str:
     if feature in _EXACT:
         return _EXACT[feature]
-    m = re.fullmatch(r"vel_(card1|addr1|email_addr|device)_(n|amt)_(1h|1d|7d)", feature)
+    m = re.fullmatch(r"vel_(card1|addr1|email_addr)_(n|amt)_(1h|1d|7d)", feature)
     if m:
         what = "Transactions" if m.group(2) == "n" else "Dollars"
         return f"{what} on this {_VEL[m.group(1)]} in the {_WIN[m.group(3)]}"

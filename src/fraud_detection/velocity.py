@@ -1,4 +1,4 @@
-"""Velocity features: how busy a card, address, email + address or device has been recently.
+"""Velocity features: how busy a card, billing region or email + address has been recently.
 
 For each transaction at time t and each entity, count the entity's transactions in the last
 1 hour, 1 day and 7 days (strictly before t), plus the dollars in the last day. Unlike cumulative
@@ -32,8 +32,9 @@ def velocity_keys(df: pd.DataFrame) -> dict[str, pd.Series]:
         keys["email_addr"] = (df["P_emaildomain"].astype("string") + "_"
                               + df["addr1"].astype("string")).where(
             df["P_emaildomain"].notna() & df["addr1"].notna())
-    if "DeviceInfo" in df:
-        keys["device"] = df["DeviceInfo"].astype("string")
+    # No device key: DeviceInfo values ("Windows", "iOS Device") are shared by thousands of
+    # unrelated customers, so their counts track site-wide traffic and drift over time
+    # (diagnose: PSI up to 0.75, adversarial ROC AUC 0.85 with device included).
     return keys
 
 
