@@ -147,7 +147,8 @@ All results come from the same time-based holdout: the latest 20% of training tr
 | v2.1 | Stricter evaluation: early stopping off validation, raw timestamp dropped | 0.634 | 0.933 | 94.6% | 44.7% | ~65% |
 | v2.2 | Refit on the full training period after early stopping | **0.660** | **0.940** | **95.9%** | **46.9%** | **~68%** |
 | v3 | + network features + Isolation Forest score | 0.640 | 0.937 | 95.9% | 44.4% | ~65% |
-| v3.1 | Ablation: network + anomaly off by default (= v2.2 features) | **0.660** | **0.940** | **95.9%** | **46.9%** | **~68%** |
+| v3.1 | Ablation: network + anomaly off by default (= v2.2 features) | 0.660 | 0.940 | 95.9% | 46.9% | ~68% |
+| v5 | Routed: new customers scored with rare-value-grouped categoricals | **0.662** | 0.939 | 95.7% | **47.2%** | **~69%** |
 
 Random scoring would give a PR AUC of 0.034 (the fraud rate). With v2.2, reviewing the top 5% of
 transactions by model score catches about 68% of all fraud, and 96% of the top 1% are fraud. v2.2 matches v2
@@ -158,7 +159,23 @@ dollars** at 27% precision. Total cost (reviews + fraud missed) is **$239k vs. $
 over the ~1-month validation period. The review cost is an illustrative assumption, not from the data; the
 dashboard lets you change it, and the best threshold moves accordingly.
 
-**By segment:**
+**By what's knowable when a transaction arrives (v5):**
+
+| Group | Share of transactions | Fraud rate | Share of all fraud | PR AUC |
+|---|---|---|---|---|
+| Prior known fraud (fraud confirmed ≥ 30 days earlier) | 0.8% | 69% | ~17% | 0.992 |
+| Prior known legit | 34.7% | 0.09% | ~1% | 0.179 |
+| No prior info | 64.4% | 4.4% | ~83% | 0.573 |
+| **All except prior known fraud** | 99.2% | 2.9% | ~83% | **0.568** |
+
+83% of all fraud comes from customers with no confirmed history. **0.568 is the honest headline:** the 0.662 overall
+is lifted by known-fraud accounts, which are near-trivial because Vesta labels an account's later transactions as fraud.
+Fraud among trusted customers (mostly account takeover) is rare, 0.09%, and hard to detect.
+
+At the $10-per-review operating point, v5 costs $244K vs. $239K for v2.2: better ranking by count of frauds, but slightly
+fewer fraud dollars caught at its threshold (77% vs. 80%). That's one seed; the dollar comparison across seeds is pending.
+
+**By segment (seen vs. new, v2.2 vs. earlier):**
 
 | Segment | Share of validation | Fraud rate | v1 PR AUC | v2.2 PR AUC |
 |---|---|---|---|---|

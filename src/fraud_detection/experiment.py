@@ -22,13 +22,14 @@ import numpy as np
 
 from fraud_detection import config, preprocess
 from fraud_detection.data import load_raw, make_synthetic
-from fraud_detection.evaluate import evaluate
+from fraud_detection.evaluate import cost_optimal_point, evaluate, threshold_table
 from fraud_detection.features import FeatureBuilder, make_uid
 from fraud_detection.train import fit_model, segment_metrics, time_split
 
 COLUMNS = [("overall", "pr_auc"), ("seen_customer", "pr_auc"), ("new_customer", "pr_auc"),
            ("excluding_known_fraud", "pr_auc"), ("no_prior_info", "pr_auc"),
-           ("overall", "precision_at_5pct")]
+           ("overall", "precision_at_5pct"), ("operating", "cost_k_usd"),
+           ("operating", "fraud_dollars_caught")]
 
 
 def _get(row: dict, group: str, metric: str) -> float:
@@ -98,10 +99,15 @@ def run(df, seeds: list[int], route: bool = False, half_life: float | None = Non
                                         None if weights is None else weights[first_tx])
             scores = np.where(seen_va, scores, new_model.predict_proba(X_va)[:, 1])
         overall = evaluate(y_va, scores)
+        amounts = valid_df.get("TransactionAmt", 0.0)
+        op = cost_optimal_point(threshold_table(y_va, scores, amounts), config.REVIEW_COST_USD,
+                                config.FALSE_POSITIVE_COST_USD)
         seg = segment_metrics(fb, valid_df, y_va, scores, X_va)
         row = {
             "seed": seed, "n_trees": n_trees,
             "overall": {k: overall[k] for k in ("pr_auc", "roc_auc", "precision_at_5pct")},
+            "operating": {"cost_k_usd": op["cost_usd"] / 1000,
+                          "fraud_dollars_caught": op["fraud_amt_caught_share"]},
             **{k: {"pr_auc": v["pr_auc"]} for k, v in seg.items() if "pr_auc" in v},
         }
         rows.append(row)
