@@ -7,10 +7,10 @@ data:             ## download IEEE-CIS data (requires Kaggle API token + joined 
 	python scripts/download_data.py
 
 train:            ## train on real data in Docker
-	docker compose --profile train run --rm trainer
+	docker compose --profile train run --build --rm trainer
 
 train-synthetic:  ## train on synthetic data in Docker (no download)
-	docker compose --profile train run --rm trainer --synthetic
+	docker compose --profile train run --build --rm trainer --synthetic
 
 up:               ## start API (:8000) and dashboard (:8050)
 	docker compose up --build -d

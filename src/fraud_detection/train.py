@@ -11,12 +11,13 @@ from datetime import UTC, datetime
 
 import joblib
 import lightgbm as lgb
+import numpy as np
 import pandas as pd
 
 from fraud_detection import config
 from fraud_detection.data import load_raw, make_synthetic
 from fraud_detection.evaluate import evaluate, pr_curve_points
-from fraud_detection.features import FeatureBuilder
+from fraud_detection.features import FeatureBuilder, make_uid
 
 
 def time_split(df: pd.DataFrame, valid_frac: float = config.VALID_FRACTION):
@@ -26,11 +27,32 @@ def time_split(df: pd.DataFrame, valid_frac: float = config.VALID_FRACTION):
     return df.iloc[:cut], df.iloc[cut:]
 
 
+FEATURE_SET = "v1-entity"
+
+
+def segment_metrics(fb: FeatureBuilder, valid_df: pd.DataFrame, y_va, scores) -> dict:
+    """Metrics for customers seen in training vs. new customers (the EDA found new ones riskier)."""
+    uid = make_uid(valid_df)
+    seen_idx = fb.history.get("uid", pd.DataFrame()).index
+    segs = {"seen_customer": uid.isin(seen_idx).fillna(False).to_numpy(dtype=bool)}
+    segs["new_customer"] = ~segs["seen_customer"]
+    out = {}
+    for name, mask in segs.items():
+        y = np.asarray(y_va)[mask]
+        if mask.sum() and 0 < y.sum() < len(y):
+            m = evaluate(y, np.asarray(scores)[mask])
+            out[name] = {"share": round(float(mask.mean()), 4),
+                         **{k: m[k] for k in ("pr_auc", "roc_auc", "base_rate")}}
+    return out
+
+
 def train(df: pd.DataFrame, data_source: str) -> dict:
     train_df, valid_df = time_split(df)
 
-    fb = FeatureBuilder().fit(train_df)
-    X_tr, y_tr = fb.transform(train_df), train_df[config.TARGET]
+    # fit_transform gives training rows past-only entity features; transform then scores the
+    # validation period against the history accumulated in training (no look-ahead).
+    fb = FeatureBuilder()
+    X_tr, y_tr = fb.fit_transform(train_df), train_df[config.TARGET]
     X_va, y_va = fb.transform(valid_df), valid_df[config.TARGET]
 
     model = lgb.LGBMClassifier(
@@ -53,6 +75,7 @@ def train(df: pd.DataFrame, data_source: str) -> dict:
 
     scores = model.predict_proba(X_va)[:, 1]
     metrics = evaluate(y_va, scores)
+    segments = segment_metrics(fb, valid_df, y_va, scores)
 
     importance = (
         pd.Series(model.booster_.feature_importance("gain"), index=fb.feature_names)
@@ -67,7 +90,9 @@ def train(df: pd.DataFrame, data_source: str) -> dict:
         "n_train": len(train_df),
         "n_features": len(fb.feature_names),
         "best_iteration": int(model.best_iteration_ or model.n_estimators),
+        "feature_set": FEATURE_SET,
         "metrics": metrics,
+        "segments": segments,
         "threshold": metrics["best_f1_threshold"],
         "feature_importance": {k: round(float(v), 2) for k, v in importance.items()},
         "pr_curve": pr_curve_points(y_va, scores),
@@ -91,7 +116,7 @@ def main() -> None:
         df, source = load_raw(nrows=args.nrows), "ieee-cis"
 
     meta = train(df, source)
-    print(json.dumps(meta["metrics"], indent=2))
+    print(json.dumps({"metrics": meta["metrics"], "segments": meta["segments"]}, indent=2))
     print(f"Saved model to {config.MODEL_PATH}")
 
 
