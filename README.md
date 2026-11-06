@@ -186,6 +186,25 @@ dashboard lets you change it, and the best threshold moves accordingly.
 **Decision:** both groups stay in the code (`FEATURE_GROUPS=network,anomaly`) but are **off by default**.
 The served model is v2.2's feature set (v3.1 below).
 
+**v4: velocity features, multi-seed evaluation and diagnostics.** Single runs turned out to be too coarse,
+so comparisons now use `make experiment` (features built once, 5 seeds, mean ± sd) and `make diagnose`
+(per-feature drift, adversarial validation, segment-level permutation).
+
+| Feature set (5 seeds) | Overall PR AUC | Seen customers | New customers |
+|---|---|---|---|
+| Baseline (v2.2 features) | 0.658 ± 0.002 | 0.917 ± 0.004 | 0.559 ± 0.002 |
+| + velocity (card, region, email + address, device) | 0.640 ± 0.008 | 0.884 ± 0.013 | 0.554 ± 0.002 |
+| + velocity without device | 0.648 ± 0.009 | 0.896 ± 0.020 | 0.558 ± 0.002 |
+
+- The baseline is stable (seen-customer sd 0.004), so the earlier single-run drops were real, not noise.
+- **Diagnosed:** device-keyed velocity drifted between late training and validation (PSI up to 0.75; the
+  1-hour count rose from 5 to 29 on average). `DeviceInfo` values like "Windows" are shared by thousands of
+  customers, so their counts track site traffic, not behavior. The same flaw likely sank v3's device and
+  card-fingerprint network counts.
+- **After removing device:** every feature is stable (PSI ≤ 0.08), but velocity still adds nothing for new
+  customers and makes the seen-customer model less stable. The C/D columns already carry this signal.
+- **Decision:** velocity stays in the code (`FEATURE_GROUPS=velocity`), off by default.
+
 Known-fraud history is the strongest signal for returning customers. It doesn't help new customers:
 device and email + address history added nothing measurable. New customers make up most of the
 volume and the remaining headroom.
@@ -200,7 +219,8 @@ likely be smaller than shown here.
 - [x] EDA notebook: fraud rate over time, missingness patterns, amount distributions, pseudo-customer IDs
 - [x] Entity resolution: pseudo-customer UID (card1 + addr1 + email + account start day) with past-only aggregates (prior count, typical amount, amount ratio, time since last transaction)
 - [x] Known-fraud history per customer / card / email + address / device, with a 30-day label delay
-- [ ] Velocity features: transactions and dollars per card / region / email + address / device in the last 1h, 1d, 7d (`FEATURE_GROUPS=velocity`, experiment in progress)
+- [x] Velocity features: transactions and dollars per card / region / email + address in the last 1h, 1d, 7d (tested over 5 seeds, no lift; off by default)
+- [x] Multi-seed experiments and drift / adversarial / permutation diagnostics (`make experiment`, `make diagnose`)
 - [x] Unsupervised anomaly score (Isolation Forest) as a complementary signal, aimed at new customers (tested, no lift; off by default)
 - [x] Network features: other customers and known fraudsters sharing a device, email + address or card fingerprint (tested, no lift; off by default)
 - [ ] Multi-hop graph features (connected components, fraud-ring size) and graph embeddings
