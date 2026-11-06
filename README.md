@@ -81,9 +81,20 @@ All results come from the same time-based holdout: the latest 20% of training tr
 | Version | Change | PR AUC | ROC AUC | Precision @ top 1% | Precision @ top 5% | Fraud caught @ 5% |
 |---|---|---|---|---|---|---|
 | v0 | Baseline: raw features, LightGBM | 0.588 | 0.923 | 90.6% | 43.4% | ~63% |
+| v1 | + past-only customer (UID) & card history features | 0.592 | 0.925 | 90.4% | 44.0% | ~64% |
 
 Random scoring would give a PR AUC of 0.034 (the fraud rate). Reviewing the top 5% of transactions by
-model score catches about 63% of all fraud.
+model score catches about 64% of all fraud.
+
+**v1 by segment:**
+
+| Segment | Share of validation | Fraud rate | PR AUC | ROC AUC |
+|---|---|---|---|---|
+| Customer seen in training | 39.9% | 1.98% | 0.722 | 0.961 |
+| New customer | 60.1% | 4.41% | 0.570 | 0.899 |
+
+New customers make up most of the volume, are 2.2× riskier, and are much harder to score, because
+there's no history to draw on. That's where most of the remaining headroom is.
 
 ## Roadmap
 
