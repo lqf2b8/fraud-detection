@@ -1,7 +1,7 @@
 FEATURE_GROUPS ?= none
 SEED ?= 42
 
-.PHONY: install data train train-synthetic up down logs test lint gcp-bootstrap publish-model
+.PHONY: install data train train-synthetic experiment up down logs test lint gcp-bootstrap publish-model
 
 install:          ## local dev environment
 	pip install -e ".[dev,notebook]" -r services/api/requirements.txt -r services/dashboard/requirements.txt
@@ -14,6 +14,9 @@ train:            ## train on real data in Docker (ablation: make train FEATURE_
 
 train-synthetic:  ## train on synthetic data in Docker (no download)
 	docker compose --profile train run --build --rm trainer --synthetic
+
+experiment:       ## compare a feature set over 5 seeds, mean ± sd (never touches ./models)
+	docker compose --profile train run --build --rm -e FEATURE_GROUPS=$(FEATURE_GROUPS) --entrypoint python trainer -m fraud_detection.experiment
 
 up:               ## start API (:8000) and dashboard (:8050)
 	docker compose up --build -d

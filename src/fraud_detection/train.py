@@ -71,30 +71,21 @@ def pick_examples(valid_df: pd.DataFrame, scores, threshold: float, per_group: i
     return df.loc[idx].reset_index(drop=True)
 
 
-def train(df: pd.DataFrame, data_source: str) -> dict:
-    train_df, valid_df = time_split(df)
-
-    # fit_transform gives training rows past-only entity features; transform then scores the
-    # validation period against the history accumulated in training (no look-ahead).
-    fb = FeatureBuilder()
-    X_all, y_all = fb.fit_transform(train_df), train_df[config.TARGET]
-    X_va, y_va = fb.transform(valid_df), valid_df[config.TARGET]
-
-    # Early stopping on the end of the training period, never on validation.
+def fit_model(X_all: pd.DataFrame, y_all: pd.Series, seed: int):
+    """Choose the tree count by early stopping on the most recent slice of the training period,
+    then refit on all training data. Validation is never used to make any modeling choice."""
     es_cut = int(len(X_all) * (1 - config.EARLY_STOP_FRACTION))
     X_tr, y_tr = X_all.iloc[:es_cut], y_all.iloc[:es_cut]
     X_es, y_es = X_all.iloc[es_cut:], y_all.iloc[es_cut:]
-
     params = {
         "learning_rate": 0.03,
         "num_leaves": 64,
         "subsample": 0.8,
         "subsample_freq": 1,
         "colsample_bytree": 0.6,
-        "random_state": config.RANDOM_STATE,
+        "random_state": seed,
         "verbose": -1,
     }
-    # 1) Choose the number of trees on the most recent slice of the training period.
     selector = lgb.LGBMClassifier(n_estimators=2000, **params)
     selector.fit(
         X_tr,
@@ -104,11 +95,22 @@ def train(df: pd.DataFrame, data_source: str) -> dict:
         callbacks=[lgb.early_stopping(100, verbose=False)],
     )
     best_iter = int(selector.best_iteration_ or selector.n_estimators)
-    # 2) Refit on the full training period (including the most recent weeks), scaling the tree
-    #    count for the extra data. Validation is never used to make any modeling choice.
     n_trees = max(1, round(best_iter / (1 - config.EARLY_STOP_FRACTION)))
     model = lgb.LGBMClassifier(n_estimators=n_trees, **params)
     model.fit(X_all, y_all)
+    return model, best_iter, n_trees
+
+
+def train(df: pd.DataFrame, data_source: str) -> dict:
+    train_df, valid_df = time_split(df)
+
+    # fit_transform gives training rows past-only entity features; transform then scores the
+    # validation period against the history accumulated in training (no look-ahead).
+    fb = FeatureBuilder()
+    X_all, y_all = fb.fit_transform(train_df), train_df[config.TARGET]
+    X_va, y_va = fb.transform(valid_df), valid_df[config.TARGET]
+
+    model, best_iter, n_trees = fit_model(X_all, y_all, config.RANDOM_STATE)
 
     scores = model.predict_proba(X_va)[:, 1]
     metrics = evaluate(y_va, scores)
