@@ -20,6 +20,7 @@ def client(tmp_path_factory, monkeypatch_module):
     monkeypatch_module.setattr(config, "MODEL_DIR", model_dir)
     monkeypatch_module.setattr(config, "MODEL_PATH", model_dir / "model.joblib")
     monkeypatch_module.setattr(config, "METADATA_PATH", model_dir / "metadata.json")
+    monkeypatch_module.setattr(config, "EXAMPLES_PATH", model_dir / "examples.parquet")
 
     from fraud_detection.train import train
 
@@ -56,4 +57,35 @@ def test_predict(client):
 
 def test_model_info(client):
     meta = client.get("/model-info").json()["metadata"]
-    assert {"metrics", "pr_curve", "feature_importance", "threshold"} <= meta.keys()
+    assert {"metrics", "pr_curve", "shap_importance", "threshold", "threshold_table",
+            "operating_point"} <= meta.keys()
+
+
+def test_predict_with_explanations(client):
+    r = client.post("/predict?explain=true", json={"transactions": [{"TransactionAmt": 75.0}]})
+    reasons = r.json()["predictions"][0]["reasons"]
+    assert len(reasons) == 5
+    assert {"feature", "description", "value", "contribution"} <= reasons[0].keys()
+
+
+def test_explanations_sum_to_model_score(client):
+    import numpy as np
+    import pandas as pd
+    from app import main
+
+    from fraud_detection.explain import contributions
+
+    df = pd.DataFrame([{"TransactionAmt": 75.0, "ProductCD": "C"}])
+    X = main.STATE["features"].transform(df)
+    contrib = contributions(main.STATE["model"], X)
+    p = main.STATE["model"].predict_proba(X)[:, 1][0]
+    assert np.isclose(1 / (1 + np.exp(-contrib.sum(axis=1).iloc[0])), p, atol=1e-6)
+
+
+def test_examples_round_trip(client):
+    ex = client.get("/examples").json()
+    assert ex and {"caught fraud", "cleared legit"} <= {e["outcome"] for e in ex}
+    detail = client.get(f"/examples/{ex[0]['TransactionID']}").json()
+    # The API re-scores the raw example and must reproduce the trainer's score exactly.
+    assert abs(detail["prediction"]["fraud_probability"] - ex[0]["score"]) < 1e-5
+    assert client.get("/examples/1").status_code == 404

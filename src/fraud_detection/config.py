@@ -11,6 +11,7 @@ MODEL_DIR = Path(os.getenv("MODEL_DIR", PROJECT_ROOT / "models"))
 
 MODEL_PATH = MODEL_DIR / "model.joblib"
 METADATA_PATH = MODEL_DIR / "metadata.json"
+EXAMPLES_PATH = MODEL_DIR / "examples.parquet"
 
 TARGET = "isFraud"
 ID_COL = "TransactionID"
@@ -23,3 +24,10 @@ RANDOM_STATE = 42
 # Fraud labels (chargebacks) arrive late. Label-based features may only use labels at least this
 # many days old, so the model never relies on information a live system wouldn't have yet.
 LABEL_DELAY_DAYS = float(os.getenv("LABEL_DELAY_DAYS", "30"))
+
+# Business assumptions for threshold selection (adjustable in the dashboard).
+# Cost of operating at a threshold = REVIEW_COST_USD × flagged transactions + $ of fraud missed.
+REVIEW_COST_USD = float(os.getenv("REVIEW_COST_USD", "10"))
+
+# Fraction of the training period held out for early stopping, so validation stays untouched.
+EARLY_STOP_FRACTION = float(os.getenv("EARLY_STOP_FRACTION", "0.1"))

@@ -1,4 +1,4 @@
-"""Train a baseline LightGBM fraud model with a time-based validation split.
+"""Train a LightGBM fraud model with a time-based validation split.
 
 Usage:
     python -m fraud_detection.train              # real IEEE-CIS data in data/raw
@@ -16,7 +16,13 @@ import pandas as pd
 
 from fraud_detection import config
 from fraud_detection.data import load_raw, make_synthetic
-from fraud_detection.evaluate import evaluate, pr_curve_points
+from fraud_detection.evaluate import (
+    cost_optimal_point,
+    evaluate,
+    pr_curve_points,
+    threshold_table,
+)
+from fraud_detection.explain import contributions, describe, global_importance
 from fraud_detection.features import FeatureBuilder, make_uid
 
 
@@ -27,7 +33,7 @@ def time_split(df: pd.DataFrame, valid_frac: float = config.VALID_FRACTION):
     return df.iloc[:cut], df.iloc[cut:]
 
 
-FEATURE_SET = "v2-known-fraud"
+FEATURE_SET = "v2.1-known-fraud"
 
 
 def segment_metrics(fb: FeatureBuilder, valid_df: pd.DataFrame, y_va, scores) -> dict:
@@ -46,14 +52,38 @@ def segment_metrics(fb: FeatureBuilder, valid_df: pd.DataFrame, y_va, scores) ->
     return out
 
 
+def pick_examples(valid_df: pd.DataFrame, scores, threshold: float, per_group: int = 25) -> pd.DataFrame:
+    """A small, honest sample of validation transactions for the dashboard's review queue:
+    caught frauds, missed frauds, false alarms and correctly-cleared legit transactions."""
+    y = valid_df[config.TARGET].to_numpy()
+    flagged = np.asarray(scores) >= threshold
+    outcome = np.select(
+        [flagged & (y == 1), ~flagged & (y == 1), flagged & (y == 0)],
+        ["caught fraud", "missed fraud", "false alarm"],
+        default="cleared legit",
+    )
+    df = valid_df.assign(outcome=outcome, score=np.round(scores, 6))
+    idx = [
+        i
+        for _, g in df.groupby("outcome")
+        for i in g.sample(min(len(g), per_group), random_state=config.RANDOM_STATE).index
+    ]
+    return df.loc[idx].reset_index(drop=True)
+
+
 def train(df: pd.DataFrame, data_source: str) -> dict:
     train_df, valid_df = time_split(df)
 
     # fit_transform gives training rows past-only entity features; transform then scores the
     # validation period against the history accumulated in training (no look-ahead).
     fb = FeatureBuilder()
-    X_tr, y_tr = fb.fit_transform(train_df), train_df[config.TARGET]
+    X_all, y_all = fb.fit_transform(train_df), train_df[config.TARGET]
     X_va, y_va = fb.transform(valid_df), valid_df[config.TARGET]
+
+    # Early stopping on the end of the training period, never on validation.
+    es_cut = int(len(X_all) * (1 - config.EARLY_STOP_FRACTION))
+    X_tr, y_tr = X_all.iloc[:es_cut], y_all.iloc[:es_cut]
+    X_es, y_es = X_all.iloc[es_cut:], y_all.iloc[es_cut:]
 
     model = lgb.LGBMClassifier(
         n_estimators=2000,
@@ -68,7 +98,7 @@ def train(df: pd.DataFrame, data_source: str) -> dict:
     model.fit(
         X_tr,
         y_tr,
-        eval_set=[(X_va, y_va)],
+        eval_set=[(X_es, y_es)],
         eval_metric="average_precision",
         callbacks=[lgb.early_stopping(100, verbose=False)],
     )
@@ -77,11 +107,14 @@ def train(df: pd.DataFrame, data_source: str) -> dict:
     metrics = evaluate(y_va, scores)
     segments = segment_metrics(fb, valid_df, y_va, scores)
 
-    importance = (
-        pd.Series(model.booster_.feature_importance("gain"), index=fb.feature_names)
-        .sort_values(ascending=False)
-        .head(25)
-    )
+    # Business layer: outcomes by review budget and the cost-optimal operating point.
+    amounts = valid_df.get("TransactionAmt", pd.Series(0.0, index=valid_df.index))
+    thresholds = threshold_table(y_va, scores, amounts)
+    operating = cost_optimal_point(thresholds, config.REVIEW_COST_USD)
+
+    # Global SHAP importance on a sample of validation transactions.
+    sample = X_va.sample(min(len(X_va), 5000), random_state=config.RANDOM_STATE)
+    shap_importance = global_importance(contributions(model, sample))
 
     metadata = {
         "model_type": "LightGBM",
@@ -94,14 +127,18 @@ def train(df: pd.DataFrame, data_source: str) -> dict:
         "label_delay_days": config.LABEL_DELAY_DAYS,
         "metrics": metrics,
         "segments": segments,
-        "threshold": metrics["best_f1_threshold"],
-        "feature_importance": {k: round(float(v), 2) for k, v in importance.items()},
+        "operating_point": operating,
+        "threshold": operating["threshold"],
+        "threshold_table": thresholds,
+        "shap_importance": shap_importance,
+        "feature_descriptions": {f: describe(f) for f in shap_importance},
         "pr_curve": pr_curve_points(y_va, scores),
     }
 
     config.MODEL_DIR.mkdir(parents=True, exist_ok=True)
     joblib.dump({"model": model, "features": fb}, config.MODEL_PATH)
     config.METADATA_PATH.write_text(json.dumps(metadata, indent=2))
+    pick_examples(valid_df, scores, operating["threshold"]).to_parquet(config.EXAMPLES_PATH)
     return metadata
 
 
@@ -117,7 +154,7 @@ def main() -> None:
         df, source = load_raw(nrows=args.nrows), "ieee-cis"
 
     meta = train(df, source)
-    print(json.dumps({"metrics": meta["metrics"], "segments": meta["segments"]}, indent=2))
+    print(json.dumps({k: meta[k] for k in ("metrics", "segments", "operating_point")}, indent=2))
     print(f"Saved model to {config.MODEL_PATH}")
 
 

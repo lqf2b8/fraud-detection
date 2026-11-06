@@ -1,9 +1,12 @@
 """Model-serving API.
 
 Endpoints:
-    GET  /health      liveness + whether a model is loaded
-    GET  /model-info  training metadata (metrics, PR curve, feature importance)
-    POST /predict     score a batch of transactions
+    GET  /health                  liveness + whether a model is loaded
+    POST /reload                  load a newly trained model without restarting
+    GET  /model-info              training metadata (metrics, thresholds, SHAP importance)
+    POST /predict                 score a batch of transactions (?explain=true for SHAP reasons)
+    GET  /examples                sample of real validation transactions (review queue)
+    GET  /examples/{id}           score + explain one example, with its true label
 """
 
 import json
@@ -12,10 +15,19 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import joblib
+import numpy as np
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Query
 
-from app.schemas import ModelInfo, Prediction, PredictRequest, PredictResponse
+from app.schemas import (
+    ExampleDetail,
+    ExampleSummary,
+    ModelInfo,
+    Prediction,
+    PredictRequest,
+    PredictResponse,
+)
+from fraud_detection.explain import contributions, top_reasons
 
 MODEL_DIR = Path(os.getenv("MODEL_DIR", "models"))
 STATE: dict = {}
@@ -23,10 +35,15 @@ STATE: dict = {}
 
 def load_artifacts() -> None:
     STATE.clear()
-    model_path, meta_path = MODEL_DIR / "model.joblib", MODEL_DIR / "metadata.json"
+    model_path = MODEL_DIR / "model.joblib"
+    meta_path = MODEL_DIR / "metadata.json"
+    examples_path = MODEL_DIR / "examples.parquet"
     if model_path.exists():
         STATE.update(joblib.load(model_path))
         STATE["metadata"] = json.loads(meta_path.read_text()) if meta_path.exists() else {}
+        if examples_path.exists():
+            ex = pd.read_parquet(examples_path)
+            STATE["examples"] = ex.set_index("TransactionID", drop=False)
 
 
 @asynccontextmanager
@@ -35,12 +52,33 @@ async def lifespan(_: FastAPI):
     yield
 
 
-app = FastAPI(title="Fraud Detection API", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Fraud Detection API", version="0.2.0", lifespan=lifespan)
 
 
 def _require_model() -> None:
     if "model" not in STATE:
         raise HTTPException(503, "No model loaded. Run the trainer service first.")
+
+
+def _score(df: pd.DataFrame, threshold: float | None, explain: bool) -> PredictResponse:
+    X = STATE["features"].transform(df)
+    model = STATE["model"]
+    probs = model.predict_proba(X)[:, 1]
+    thr = threshold if threshold is not None else STATE["metadata"].get("threshold", 0.5)
+    reasons = top_reasons(contributions(model, X), X) if explain else [None] * len(df)
+    ids = df["TransactionID"].tolist() if "TransactionID" in df else [None] * len(df)
+    return PredictResponse(
+        threshold=thr,
+        predictions=[
+            Prediction(
+                TransactionID=None if i is None or pd.isna(i) else int(i),
+                fraud_probability=round(float(p), 6),
+                flagged=bool(p >= thr),
+                reasons=r,
+            )
+            for i, p, r in zip(ids, probs, reasons)
+        ],
+    )
 
 
 @app.get("/health")
@@ -50,7 +88,6 @@ def health() -> dict:
 
 @app.post("/reload")
 def reload() -> dict:
-    """Pick up a newly trained model without restarting the container."""
     load_artifacts()
     return health()
 
@@ -65,21 +102,47 @@ def model_info() -> ModelInfo:
 def predict(
     req: PredictRequest,
     threshold: float | None = Query(None, ge=0, le=1, description="override decision threshold"),
+    explain: bool = Query(False, description="include top SHAP reasons per transaction"),
 ) -> PredictResponse:
     _require_model()
     df = pd.DataFrame([t.model_dump() for t in req.transactions])
-    X = STATE["features"].transform(df)
-    probs = STATE["model"].predict_proba(X)[:, 1]
-    thr = threshold if threshold is not None else STATE["metadata"].get("threshold", 0.5)
-    ids = df["TransactionID"].tolist()
-    return PredictResponse(
-        threshold=thr,
-        predictions=[
-            Prediction(
-                TransactionID=None if pd.isna(i) else int(i),
-                fraud_probability=round(float(p), 6),
-                flagged=bool(p >= thr),
-            )
-            for i, p in zip(ids, probs)
-        ],
+    return _score(df, threshold, explain)
+
+
+@app.get("/examples", response_model=list[ExampleSummary])
+def examples() -> list[ExampleSummary]:
+    _require_model()
+    ex = STATE.get("examples")
+    if ex is None:
+        return []
+    return [
+        ExampleSummary(
+            TransactionID=int(r.TransactionID),
+            amount=None if pd.isna(r.TransactionAmt) else float(r.TransactionAmt),
+            product=None if pd.isna(r.ProductCD) else str(r.ProductCD),
+            is_fraud=bool(r.isFraud),
+            outcome=r.outcome,
+            score=float(r.score),
+        )
+        for r in ex.itertuples(index=False)
+    ]
+
+
+@app.get("/examples/{transaction_id}", response_model=ExampleDetail)
+def example_detail(transaction_id: int) -> ExampleDetail:
+    _require_model()
+    ex = STATE.get("examples")
+    if ex is None or transaction_id not in ex.index:
+        raise HTTPException(404, f"Example {transaction_id} not found")
+    row = ex.loc[[transaction_id]]
+    pred = _score(row.drop(columns=["isFraud", "outcome", "score"]), None, explain=True)
+    raw = row.iloc[0].drop(["isFraud", "outcome", "score"])
+    shown = ["TransactionAmt", "ProductCD", "card4", "card6", "P_emaildomain", "DeviceType", "DeviceInfo"]
+    return ExampleDetail(
+        prediction=pred.predictions[0],
+        threshold=pred.threshold,
+        is_fraud=bool(row["isFraud"].iloc[0]),
+        outcome=str(row["outcome"].iloc[0]),
+        details={c: (None if pd.isna(raw[c]) else (raw[c].item() if isinstance(raw[c], np.generic) else raw[c]))
+                 for c in shown if c in raw.index},
     )

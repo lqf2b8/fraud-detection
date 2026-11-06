@@ -3,3 +3,4 @@ dash-bootstrap-components>=1.6
 plotly>=5.22
 requests>=2.31
 gunicorn>=22
+numpy>=1.26

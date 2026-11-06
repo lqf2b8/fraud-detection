@@ -31,7 +31,10 @@ import pandas as pd
 
 from fraud_detection import config
 
-DROP_COLS = {config.TARGET, config.ID_COL}
+# The raw timestamp is excluded: with a time-based split every validation timestamp lies beyond the
+# training range, so the model can't learn anything from it that carries over. Hour and day of
+# week are kept.
+DROP_COLS = {config.TARGET, config.ID_COL, config.TIME_COL}
 AMT = "TransactionAmt"
 DAY = 86_400
 

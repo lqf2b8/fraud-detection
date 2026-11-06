@@ -46,6 +46,16 @@ class Prediction(BaseModel):
     TransactionID: int | None
     fraud_probability: float
     flagged: bool
+    reasons: list["Reason"] | None = None
+
+
+class Reason(BaseModel):
+    """One SHAP contribution. Positive pushes toward fraud (log-odds units)."""
+
+    feature: str
+    description: str
+    value: str | float | None
+    contribution: float
 
 
 class PredictResponse(BaseModel):
@@ -55,3 +65,23 @@ class PredictResponse(BaseModel):
 
 class ModelInfo(BaseModel):
     metadata: dict[str, Any]
+
+
+class ExampleSummary(BaseModel):
+    TransactionID: int
+    amount: float | None
+    product: str | None
+    is_fraud: bool
+    outcome: str
+    score: float
+
+
+class ExampleDetail(BaseModel):
+    prediction: Prediction
+    threshold: float
+    is_fraud: bool
+    outcome: str
+    details: dict[str, Any]
+
+
+Prediction.model_rebuild()
