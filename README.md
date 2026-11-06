@@ -1,5 +1,8 @@
 # Fraud Detection
 
+**Live demo:** [dashboard](https://fraud-dashboard-73tqrlqnaq-uc.a.run.app) · [API docs](https://fraud-api-73tqrlqnaq-uc.a.run.app/docs)
+(hosted on Google Cloud Run; scales to zero, so the first load after a quiet period takes a few seconds)
+
 End-to-end fraud and anomaly detection on the
 [IEEE-CIS Fraud Detection](https://www.kaggle.com/competitions/ieee-fraud-detection) dataset
 (~590k card-not-present e-commerce transactions from Vesta Corporation, ~3.5% fraud).
