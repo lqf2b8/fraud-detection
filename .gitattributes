@@ -1,0 +1,11 @@
+# Shell scripts and files read inside Linux containers must keep LF line endings,
+# even when the repo is checked out on Windows (CRLF breaks bash: "set: pipefail").
+* text=auto
+*.sh text eol=lf
+Makefile text eol=lf
+Dockerfile text eol=lf
+*.yml text eol=lf
+*.toml text eol=lf
+*.py text eol=lf
+*.parquet binary
+*.joblib binary
