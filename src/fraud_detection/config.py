@@ -19,7 +19,12 @@ TIME_COL = "TransactionDT"
 
 # Fraction of the most recent transactions held out for validation (time-based split).
 VALID_FRACTION = float(os.getenv("VALID_FRACTION", "0.2"))
-RANDOM_STATE = 42
+RANDOM_STATE = int(os.getenv("SEED", "42"))
+
+# Optional feature groups, for ablations: e.g. FEATURE_GROUPS=network  or  FEATURE_GROUPS=none
+FEATURE_GROUPS = {
+    g.strip() for g in os.getenv("FEATURE_GROUPS", "network,anomaly").split(",") if g.strip()
+} - {"none"}
 
 # Fraud labels (chargebacks) arrive late. Label-based features may only use labels at least this
 # many days old, so the model never relies on information a live system wouldn't have yet.

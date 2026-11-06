@@ -210,9 +210,11 @@ class FeatureBuilder:
         # Labels from the training data itself; the delay ensures a row only sees labels of
         # transactions at least LABEL_DELAY_DAYS older than itself (never its own).
         self._set_label_history(df)
-        if config.TARGET in df and config.TIME_COL in df:
+        self.network_events, self.anomaly = {}, None
+        if "network" in config.FEATURE_GROUPS and config.TARGET in df and config.TIME_COL in df:
             self.network_events = build_events(df, make_uid(df), self.label_delay_days)
-        self.anomaly = AnomalyScorer().fit(df.drop(columns=[config.TARGET], errors="ignore"))
+        if "anomaly" in config.FEATURE_GROUPS:
+            self.anomaly = AnomalyScorer().fit(df.drop(columns=[config.TARGET], errors="ignore"))
         X = self._engineer(df)
         cols = [c for c in X.columns if c not in DROP_COLS]
         self.categorical = {

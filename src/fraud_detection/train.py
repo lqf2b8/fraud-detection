@@ -141,6 +141,8 @@ def train(df: pd.DataFrame, data_source: str) -> dict:
         "best_iteration": best_iter,
         "n_trees": n_trees,
         "feature_set": FEATURE_SET,
+        "feature_groups": sorted(config.FEATURE_GROUPS),
+        "seed": config.RANDOM_STATE,
         "label_delay_days": config.LABEL_DELAY_DAYS,
         "metrics": metrics,
         "segments": segments,
@@ -172,7 +174,7 @@ def main() -> None:
         df, source = load_raw(nrows=args.nrows), "ieee-cis"
 
     meta = train(df, source)
-    keys = ("metrics", "segments", "anomaly_only", "operating_point")
+    keys = ("feature_groups", "seed", "metrics", "segments", "anomaly_only", "operating_point")
     print(json.dumps({k: meta[k] for k in keys}, indent=2))
     print(f"Saved model to {config.MODEL_PATH}")
 

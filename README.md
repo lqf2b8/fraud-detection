@@ -112,6 +112,7 @@ All results come from the same time-based holdout: the latest 20% of training tr
 | v2 | + known-fraud history (customer, card, email + address, device), 30-day label delay | 0.659 | 0.941 | 96.3% | 46.7% | ~68% |
 | v2.1 | Stricter evaluation: early stopping off validation, raw timestamp dropped | 0.634 | 0.933 | 94.6% | 44.7% | ~65% |
 | v2.2 | Refit on the full training period after early stopping | **0.660** | **0.940** | **95.9%** | **46.9%** | **~68%** |
+| v3 | + network features + Isolation Forest score | 0.640 | 0.937 | 95.9% | 44.4% | ~65% |
 
 Random scoring would give a PR AUC of 0.034 (the fraud rate). With v2.2, reviewing the top 5% of
 transactions by model score catches about 68% of all fraud, and 96% of the top 1% are fraud. v2.2 matches v2
@@ -128,6 +129,11 @@ dashboard lets you change it, and the best threshold moves accordingly.
 |---|---|---|---|---|
 | Customer seen in training | 39.9% | 1.98% | 0.722 | **0.922** |
 | New customer | 60.1% | 4.41% | 0.570 | 0.558 |
+
+**v3 was a negative result:** adding network features and the anomaly score lowered PR AUC (0.660 → 0.640),
+including for new customers (0.558 → 0.554), the segment it was meant to help. On its own, the anomaly
+score has some signal for new customers (PR AUC 0.153 vs. a 0.044 base rate; ROC AUC 0.73), but it adds
+nothing on top of the supervised model. An ablation is in progress (`make train FEATURE_GROUPS=...`).
 
 Known-fraud history is the strongest signal for returning customers. It doesn't help new customers:
 device and email + address history added nothing measurable. New customers make up most of the
