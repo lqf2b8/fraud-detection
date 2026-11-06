@@ -195,6 +195,7 @@ so comparisons now use `make experiment` (features built once, 5 seeds, mean ± 
 | Baseline (v2.2 features) | 0.658 ± 0.002 | 0.917 ± 0.004 | 0.559 ± 0.002 |
 | + velocity (card, region, email + address, device) | 0.640 ± 0.008 | 0.884 ± 0.013 | 0.554 ± 0.002 |
 | + velocity without device | 0.648 ± 0.009 | 0.896 ± 0.020 | 0.558 ± 0.002 |
+| Routed: separate new-customer model trained on first transactions only | 0.647 ± 0.003 | 0.917 ± 0.004 | 0.543 ± 0.004 |
 
 - The baseline is stable (seen-customer sd 0.004), so the earlier single-run drops were real, not noise.
 - **Diagnosed:** device-keyed velocity drifted between late training and validation (PSI up to 0.75; the
@@ -204,6 +205,10 @@ so comparisons now use `make experiment` (features built once, 5 seeds, mean ± 
 - **After removing device:** every feature is stable (PSI ≤ 0.08), but velocity still adds nothing for new
   customers and makes the seen-customer model less stable. The C/D columns already carry this signal.
 - **Decision:** velocity stays in the code (`FEATURE_GROUPS=velocity`), off by default.
+- **Routing:** a dedicated model trained only on each customer's first transaction (229K rows) did *worse* on
+  new customers than the model trained on everything (−0.016). Repeat transactions teach merchant, amount and
+  device patterns that carry over to first-time customers, so restricting the training set loses more than it
+  gains. Seen customers were unchanged (same model), which confirms the routing itself was correct.
 
 Known-fraud history is the strongest signal for returning customers. It doesn't help new customers:
 device and email + address history added nothing measurable. New customers make up most of the
