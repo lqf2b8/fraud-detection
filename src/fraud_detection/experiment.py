@@ -9,6 +9,7 @@ reports each seed plus the mean and spread. It never writes to models/, so the s
     make experiment FEATURE_GROUPS=velocity       # a candidate feature group
     make experiment ARGS=--route                  # separate model for new customers
     make experiment ARGS="--half-life 0 30 90"    # recency weighting, several half-lives
+    make experiment ARGS="--seeds 1 2 3 --variants catnum freq nan999 dnorm"   # preprocessing
     python -m fraud_detection.experiment --seeds 1 2 3 --nrows 200000
 """
 
@@ -18,7 +19,7 @@ import time
 
 import numpy as np
 
-from fraud_detection import config
+from fraud_detection import config, preprocess
 from fraud_detection.data import load_raw, make_synthetic
 from fraud_detection.evaluate import evaluate
 from fraud_detection.features import FeatureBuilder, make_uid
@@ -44,7 +45,7 @@ def recency_weights(t: np.ndarray, half_life_days: float | None) -> np.ndarray |
 
 
 def run(df, seeds: list[int], route: bool = False, half_life: float | None = None,
-        _cache: dict | None = None) -> dict:
+        _cache: dict | None = None, variant: str = "baseline") -> dict:
     if _cache:
         train_df, valid_df, fb, X_all, y_all, X_va, y_va = _cache["data"]
     else:
@@ -56,6 +57,10 @@ def run(df, seeds: list[int], route: bool = False, half_life: float | None = Non
         print(f"features: {X_all.shape[1]} columns, built in {time.time() - t0:.0f}s", flush=True)
         if _cache is not None:
             _cache["data"] = (train_df, valid_df, fb, X_all, y_all, X_va, y_va)
+    if variant != "baseline":
+        X_all, X_va = preprocess.apply(variant, X_all, X_va, list(fb.categorical),
+                                       train_df[config.TIME_COL], valid_df[config.TIME_COL])
+        print(f"variant {variant}: {X_all.shape[1]} columns", flush=True)
     weights = recency_weights(train_df[config.TIME_COL].to_numpy(float), half_life)
     if weights is not None:
         print(f"recency weighting: half-life {half_life:g} days; oldest weight "
@@ -97,7 +102,7 @@ def run(df, seeds: list[int], route: bool = False, half_life: float | None = Non
         summary[f"{g}.{m}"] = {"mean": round(float(vals.mean()), 4),
                                "sd": round(float(vals.std(ddof=1)) if len(vals) > 1 else 0.0, 4)}
     return {"feature_groups": sorted(config.FEATURE_GROUPS), "route": route,
-            "half_life_days": half_life, "seeds": seeds,
+            "half_life_days": half_life, "variant": variant, "seeds": seeds,
             "summary": summary,
             "runs": rows}
 
@@ -109,6 +114,8 @@ def main() -> None:
     parser.add_argument("--nrows", type=int, default=None)
     parser.add_argument("--half-life", type=float, nargs="+", default=[0],
                         help="recency weighting half-life(s) in days; 0 = none. Several = one run each")
+    parser.add_argument("--variants", nargs="+", default=["baseline"],
+                        help="preprocessing variants, e.g. catnum freq catnum+freq+dnorm nan999")
     parser.add_argument("--route", action="store_true",
                         help="separate model for new customers, trained on first transactions")
     args = parser.parse_args()
@@ -116,19 +123,18 @@ def main() -> None:
     cache: dict = {}
     results = []
     for hl in args.half_life:
-        print(f"\n=== half-life: {hl:g} days ===" if hl else "\n=== no recency weighting ===",
-              flush=True)
-        results.append(run(df, args.seeds, args.route, hl or None, _cache=cache))
-    for args_hl, result in zip(args.half_life, results):
-        label = f"half-life {args_hl:g}d" if args_hl else "unweighted"
+        for variant in args.variants:
+            preprocess.parse(variant)  # fail fast on typos
+            label = (f"half-life {hl:g}d" if hl else "unweighted") + f", variant {variant}"
+            print(f"\n=== {label} ===", flush=True)
+            r = run(df, args.seeds, args.route, hl or None, _cache=cache, variant=variant)
+            results.append((label, r))
+    for label, result in results:
         print(f"\nSUMMARY  feature_groups = {result['feature_groups'] or ['none']}  "
               f"routing = {'on' if args.route else 'off'}  {label}")
         for k, v in result["summary"].items():
             print(f"  {k:<28} {v['mean']:.4f} ± {v['sd']:.4f}")
-    print(json.dumps([{"feature_groups": r["feature_groups"], "route": args.route,
-                       "half_life_days": r["half_life_days"], "summary": r["summary"]}
-                      for r in results]))
-
+    print(json.dumps([{"label": label, "summary": r["summary"]} for label, r in results]))
 
 if __name__ == "__main__":
     main()
