@@ -1,0 +1,103 @@
+name: deploy
+
+# Builds the API and dashboard images and deploys them to Cloud Run after CI passes on main.
+# Signs in to Google with Workload Identity Federation: no service account key is stored.
+# Needs repository variables GCP_PROJECT, GCP_REGION and WIF_PROVIDER (printed by
+# infra/gcp/bootstrap.sh); without them this workflow skips itself.
+#
+# The model itself is not built here (training needs the Kaggle data, which stays local).
+# The API reads it from a Cloud Storage bucket that `make publish-model` fills.
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write   # to request the GitHub OIDC token that Google exchanges for access
+
+env:
+  PROJECT: ${{ vars.GCP_PROJECT }}
+  REGION: ${{ vars.GCP_REGION || 'us-central1' }}
+
+jobs:
+  deploy:
+    if: >-
+      vars.WIF_PROVIDER != '' &&
+      (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: fraud-deployer@${{ vars.GCP_PROJECT }}.iam.gserviceaccount.com
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Build and push images
+        id: images
+        run: |
+          registry="$REGION-docker.pkg.dev/$PROJECT/fraud-detection"
+          tag="$(git rev-parse --short=12 HEAD)"
+          gcloud auth configure-docker "$REGION-docker.pkg.dev" --quiet
+          for svc in api dashboard; do
+            image="$registry/$svc:$tag"
+            docker build -t "$image" -f "services/$svc/Dockerfile" .
+            docker push "$image"
+          done
+          echo "registry=$registry" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy the API
+        id: api
+        env:
+          IMAGE: ${{ steps.images.outputs.registry }}/api:${{ steps.images.outputs.tag }}
+        run: |
+          gcloud run deploy fraud-api --image "$IMAGE" --region "$REGION" --quiet \
+            --service-account "fraud-api@$PROJECT.iam.gserviceaccount.com" \
+            --execution-environment gen2 --cpu-boost \
+            --clear-volumes --clear-volume-mounts \
+            --add-volume "name=models,type=cloud-storage,bucket=$PROJECT-fraud-models,readonly=true" \
+            --add-volume-mount volume=models,mount-path=/models \
+            --set-env-vars MODEL_DIR=/models \
+            --allow-unauthenticated --memory 2Gi --cpu 1 --min-instances 0 --max-instances 2
+          url="$(gcloud run services describe fraud-api --region "$REGION" --format='value(status.url)')"
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy the dashboard
+        id: dashboard
+        env:
+          IMAGE: ${{ steps.images.outputs.registry }}/dashboard:${{ steps.images.outputs.tag }}
+          API_URL: ${{ steps.api.outputs.url }}
+        run: |
+          gcloud run deploy fraud-dashboard --image "$IMAGE" --region "$REGION" --quiet \
+            --service-account "fraud-dashboard@$PROJECT.iam.gserviceaccount.com" \
+            --set-env-vars "API_URL=$API_URL,API_DOCS_URL=$API_URL/docs" \
+            --allow-unauthenticated --memory 512Mi --min-instances 0 --max-instances 2
+          url="$(gcloud run services describe fraud-dashboard --region "$REGION" --format='value(status.url)')"
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke test
+        env:
+          API_URL: ${{ steps.api.outputs.url }}
+          DASHBOARD_URL: ${{ steps.dashboard.outputs.url }}
+        run: |
+          curl -fsS --max-time 120 "$API_URL/health"; echo
+          curl -fsS --max-time 120 "$DASHBOARD_URL/" -o /dev/null
+          {
+            echo "### Deployed $(git rev-parse --short=12 HEAD)"
+            echo "- Dashboard: $DASHBOARD_URL"
+            echo "- API docs: $API_URL/docs"
+          } >> "$GITHUB_STEP_SUMMARY"

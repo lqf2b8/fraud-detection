@@ -33,3 +33,21 @@ services:
       api:
         condition: service_healthy
     restart: unless-stopped
+
+  # Google Cloud CLI in a container, so nothing needs installing locally (make gcp-bootstrap,
+  # make publish-model). Your sign-in is kept in the gcloud-config volume, never in the repo.
+  gcloud:
+    image: gcr.io/google.com/cloudsdktool/google-cloud-cli:slim
+    environment:
+      GCP_PROJECT: ${GCP_PROJECT:-}
+      GCP_REGION: ${GCP_REGION:-us-central1}
+      CLOUDSDK_CONFIG: /gcloud
+    volumes:
+      - gcloud-config:/gcloud
+      - ./infra/gcp:/setup:ro
+      - ./models:/models:ro
+    entrypoint: ["bash"]
+    profiles: ["gcp"]
+
+volumes:
+  gcloud-config:

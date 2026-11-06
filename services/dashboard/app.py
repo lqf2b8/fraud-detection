@@ -16,6 +16,11 @@ import requests
 from dash import Dash, Input, Output, State, dash_table, dcc, html
 
 API_URL = os.getenv("API_URL", "http://localhost:8000")
+# Public links shown in the header (the API's own URL is internal to the dashboard otherwise).
+API_DOCS_URL = os.getenv("API_DOCS_URL", f"{API_URL}/docs")
+REPO_URL = "https://github.com/lqf2b8/fraud-detection"
+# Generous: on Cloud Run the API may be starting from zero and loading the model.
+API_TIMEOUT = float(os.getenv("API_TIMEOUT", "60"))
 FRAUD, LEGIT, GREY = "#c0392b", "#27ae60", "#7f8c8d"
 
 # Bootstrap (Bootswatch Flatly, MIT) is bundled in assets/ and auto-served by Dash; no CDN needed.
@@ -26,7 +31,7 @@ server = app.server  # for gunicorn
 # ----------------------------------------------------------------------------- API helpers
 def api_get(path: str):
     try:
-        r = requests.get(f"{API_URL}{path}", timeout=10)
+        r = requests.get(f"{API_URL}{path}", timeout=API_TIMEOUT)
         return r.json() if r.ok else None
     except requests.RequestException:
         return None
@@ -332,7 +337,7 @@ def score(_, amt, product, card4, card6, email, device):
            "P_emaildomain": email, "DeviceType": device}
     try:
         r = requests.post(f"{API_URL}/predict", params={"explain": "true"},
-                          json={"transactions": [txn]}, timeout=10)
+                          json={"transactions": [txn]}, timeout=API_TIMEOUT)
         r.raise_for_status()
     except requests.RequestException as e:
         return dbc.Alert(f"API error: {e}", color="danger")
@@ -409,8 +414,18 @@ def performance_tab():
 app.layout = dbc.Container(
     [
         html.H2("Transaction Fraud Detection", className="mt-4"),
-        html.P("Review flagged transactions, choose an operating threshold, and inspect model performance.",
-               className="text-muted"),
+        html.P(
+            [
+                (
+                    "Review flagged transactions, choose an operating threshold, and inspect model "
+                    "performance. Built on the IEEE-CIS (Vesta) card-not-present dataset. "
+                ),
+                html.A("Code on GitHub", href=REPO_URL, target="_blank"),
+                " · ",
+                html.A("API docs", href=API_DOCS_URL, target="_blank"),
+            ],
+            className="text-muted",
+        ),
         dbc.Tabs(
             [
                 dbc.Tab(label="Review queue", tab_id="review"),

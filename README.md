@@ -42,6 +42,36 @@ make train
 curl -X POST localhost:8000/reload   # API picks up the new model
 ```
 
+## Deploy to Google Cloud Run
+
+The API and dashboard run on Cloud Run, deployed from GitHub Actions with keyless Workload Identity
+Federation. The model is trained locally (the Kaggle data never leaves your machine) and published to a
+private Cloud Storage bucket that the API mounts read-only.
+
+```
+ your machine                     GitHub Actions                  Google Cloud
+ make train ──▶ ./models ──make publish-model──────────────────▶ gs://<project>-fraud-models
+                                                                       │ (read-only volume)
+ git push main ──▶ CI ──▶ deploy ──▶ Artifact Registry ──▶ Cloud Run: fraud-api ◀── fraud-dashboard
+```
+
+**One-time setup** (the `gcloud` CLI runs in a container, so nothing to install):
+
+1. Set `GCP_PROJECT` (and optionally `GCP_REGION`) in `.env`. The project needs billing enabled.
+2. `make gcp-bootstrap`: sign in, then it creates the image registry, the model bucket, least-privilege
+   service accounts, and Workload Identity Federation scoped to this repository only.
+3. Add the three values it prints as GitHub repository **variables**
+   (Settings → Secrets and variables → Actions → Variables): `GCP_PROJECT`, `GCP_REGION`, `WIF_PROVIDER`.
+4. `make publish-model` uploads your trained model.
+5. Run the **deploy** workflow (Actions → deploy → Run workflow). After that, every push to `main` that
+   passes CI redeploys automatically. The workflow summary prints the dashboard and API URLs.
+
+**Refreshing the model** after an experiment needs no code deploy: `make train`, then
+`make publish-model`, which uploads the new artifacts and rolls the API onto them.
+
+Both services scale to zero when idle, so the first request after a quiet period takes a few seconds
+while the API loads the model.
+
 ## API
 
 | Endpoint | Purpose |
