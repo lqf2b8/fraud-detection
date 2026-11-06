@@ -200,7 +200,7 @@ likely be smaller than shown here.
 - [x] EDA notebook: fraud rate over time, missingness patterns, amount distributions, pseudo-customer IDs
 - [x] Entity resolution: pseudo-customer UID (card1 + addr1 + email + account start day) with past-only aggregates (prior count, typical amount, amount ratio, time since last transaction)
 - [x] Known-fraud history per customer / card / email + address / device, with a 30-day label delay
-- [ ] Velocity and behavioral features (counts and amounts per entity over time windows)
+- [ ] Velocity features: transactions and dollars per card / region / email + address / device in the last 1h, 1d, 7d (`FEATURE_GROUPS=velocity`, experiment in progress)
 - [x] Unsupervised anomaly score (Isolation Forest) as a complementary signal, aimed at new customers (tested, no lift; off by default)
 - [x] Network features: other customers and known fraudsters sharing a device, email + address or card fingerprint (tested, no lift; off by default)
 - [ ] Multi-hop graph features (connected components, fraud-ring size) and graph embeddings

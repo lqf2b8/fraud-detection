@@ -36,6 +36,7 @@ from fraud_detection import config
 from fraud_detection.anomaly import AnomalyScorer
 from fraud_detection.counting import known_label_counts
 from fraud_detection.network import build_events, network_features
+from fraud_detection.velocity import VelocityTracker
 
 # The raw timestamp is excluded: with a time-based split every validation timestamp lies beyond the
 # training range, so the model can't learn anything from it that carries over. Hour and day of
@@ -89,6 +90,8 @@ class FeatureBuilder:
         self.label_delay_days = config.LABEL_DELAY_DAYS
         self.network_events: dict = {}
         self.anomaly = None
+        self.velocity = None
+        self._fitting = False
 
     # ------------------------------------------------------------------ basic features
     @staticmethod
@@ -195,6 +198,10 @@ class FeatureBuilder:
             parts.append(network_features(df, make_uid(df), self.network_events))
         if getattr(self, "anomaly", None) is not None:
             parts.append(self.anomaly.score(df).rename("anomaly_score").to_frame())
+        if getattr(self, "velocity", None) is not None:
+            # Training rows count each other (past-only); inference adds the saved training tail.
+            history = None if getattr(self, "_fitting", False) else self.velocity.tail
+            parts.append(self.velocity.features(df, history))
         return pd.concat(parts, axis=1) if parts else pd.DataFrame(index=df.index)
 
     def _engineer(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -210,12 +217,18 @@ class FeatureBuilder:
         # Labels from the training data itself; the delay ensures a row only sees labels of
         # transactions at least LABEL_DELAY_DAYS older than itself (never its own).
         self._set_label_history(df)
-        self.network_events, self.anomaly = {}, None
+        self.network_events, self.anomaly, self.velocity = {}, None, None
+        if "velocity" in config.FEATURE_GROUPS:
+            self.velocity = VelocityTracker().fit(df)
         if "network" in config.FEATURE_GROUPS and config.TARGET in df and config.TIME_COL in df:
             self.network_events = build_events(df, make_uid(df), self.label_delay_days)
         if "anomaly" in config.FEATURE_GROUPS:
             self.anomaly = AnomalyScorer().fit(df.drop(columns=[config.TARGET], errors="ignore"))
-        X = self._engineer(df)
+        self._fitting = True
+        try:
+            X = self._engineer(df)
+        finally:
+            self._fitting = False
         cols = [c for c in X.columns if c not in DROP_COLS]
         self.categorical = {
             c: sorted(X[c].dropna().astype(str).unique().tolist())
