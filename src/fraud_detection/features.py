@@ -13,8 +13,15 @@ Past-only is the important part:
 - Inference rows (`transform`) see the history saved from training, plus earlier rows in the same
   batch. Validation therefore matches what a deployed model would see.
 
+v2 adds **known-fraud history with a reporting delay**. For each entity (customer, card,
+email domain + billing address, device), it counts how many of the entity's earlier transactions
+were *already confirmed* fraud: labeled, and at least `LABEL_DELAY_DAYS` old. This mimics
+chargeback lag. A transaction never sees its own label, or any label too recent to have been
+reported yet. Entities like device and email + address can carry risk even for a brand-new
+customer.
+
 The saved history is frozen at training time. In production it would live in a feature store
-updated as transactions arrive.
+updated as transactions and chargebacks arrive.
 """
 
 from __future__ import annotations
@@ -49,12 +56,55 @@ def _entity_keys(df: pd.DataFrame) -> dict[str, pd.Series]:
     return keys
 
 
+def _label_entity_keys(df: pd.DataFrame) -> dict[str, pd.Series]:
+    """Entities whose known-fraud history is tracked. Shared attributes (email + address, device)
+    let risk carry over to customers the model has never seen."""
+    keys = _entity_keys(df)
+    if "P_emaildomain" in df and "addr1" in df:
+        keys["email_addr"] = (df["P_emaildomain"].astype("string") + "_"
+                              + df["addr1"].astype("string")).where(
+            df["P_emaildomain"].notna() & df["addr1"].notna())
+    if "DeviceInfo" in df:
+        keys["device"] = df["DeviceInfo"].astype("string")
+    return keys
+
+
+def known_label_counts(hist_key, hist_t, hist_y, q_key, q_t, delay_secs: float):
+    """For each query (key, time), count history rows with the same key whose time is at most
+    time - delay, and how many of those were fraud. Vectorized with one sort + searchsorted."""
+    hist_key, q_key = pd.Series(hist_key).reset_index(drop=True), pd.Series(q_key).reset_index(drop=True)
+    codes, _ = pd.factorize(pd.concat([hist_key, q_key], ignore_index=True), use_na_sentinel=True)
+    hk, qk = codes[: len(hist_key)], codes[len(hist_key):]
+    h_ok = hk >= 0
+    hk, ht, hy = hk[h_ok], np.asarray(hist_t, float)[h_ok], np.asarray(hist_y, float)[h_ok]
+
+    span = max(ht.max(initial=0), np.nanmax(np.asarray(q_t, float), initial=0)) + delay_secs + 1
+    order = np.lexsort((ht, hk))
+    v = hk[order] * span + ht[order]
+    cum_fraud = np.concatenate([[0.0], np.cumsum(hy[order])])
+
+    q_ok = (qk >= 0) & ~np.isnan(np.asarray(q_t, float))
+    qkk, qt = qk[q_ok].astype(float), np.asarray(q_t, float)[q_ok]
+    start = np.searchsorted(v, qkk * span, side="left")
+    end = np.searchsorted(v, qkk * span + (qt - delay_secs), side="right")
+    end = np.maximum(end, start)  # (qt - delay) can fall before the group's first row
+
+    n = np.full(len(q_key), np.nan)
+    f = np.full(len(q_key), np.nan)
+    n[q_ok] = end - start
+    f[q_ok] = cum_fraud[end] - cum_fraud[start]
+    return n, f
+
+
 class FeatureBuilder:
     def __init__(self) -> None:
         self.feature_names: list[str] = []
         self.categorical: dict[str, list[str]] = {}
         # Per-entity history: index = entity key, columns = n, amt_sum, last_dt
         self.history: dict[str, pd.DataFrame] = {}
+        # Labeled training transactions per entity (key, time, label) for known-fraud features
+        self.label_history: dict[str, pd.DataFrame] = {}
+        self.label_delay_days = config.LABEL_DELAY_DAYS
 
     # ------------------------------------------------------------------ basic features
     @staticmethod
@@ -110,6 +160,30 @@ class FeatureBuilder:
             feats[name] = out
         return pd.concat(feats.values(), axis=1).reindex(df.index) if feats else pd.DataFrame(index=df.index)
 
+    def _label_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        if config.TIME_COL not in df or not self.label_history:
+            return pd.DataFrame(index=df.index)
+        delay = self.label_delay_days * DAY
+        out = {}
+        for name, key in _label_entity_keys(df).items():
+            hist = self.label_history.get(name)
+            if hist is None:
+                continue
+            n, f = known_label_counts(hist["k"], hist["t"], hist["y"], key, df[config.TIME_COL], delay)
+            out[f"{name}_known_n"] = n
+            out[f"{name}_known_fraud"] = f
+            with np.errstate(invalid="ignore", divide="ignore"):
+                out[f"{name}_known_fraud_rate"] = np.where(n > 0, f / n, np.nan)
+        return pd.DataFrame(out, index=df.index)
+
+    def _set_label_history(self, df: pd.DataFrame) -> None:
+        self.label_history = {}
+        if config.TARGET not in df or config.TIME_COL not in df:
+            return
+        for name, key in _label_entity_keys(df).items():
+            h = pd.DataFrame({"k": key, "t": df[config.TIME_COL], "y": df[config.TARGET]})
+            self.label_history[name] = h.dropna(subset=["k"]).reset_index(drop=True)
+
     def _update_history(self, df: pd.DataFrame) -> None:
         if config.TIME_COL not in df:
             return
@@ -131,11 +205,16 @@ class FeatureBuilder:
 
     # ------------------------------------------------------------------ public API
     def _engineer(self, df: pd.DataFrame) -> pd.DataFrame:
-        return pd.concat([self._basic(df), self._entity_features(df)], axis=1)
+        return pd.concat(
+            [self._basic(df), self._entity_features(df), self._label_features(df)], axis=1
+        )
 
     def fit_transform(self, df: pd.DataFrame) -> pd.DataFrame:
         """Fit on training data. Returns past-only features, then stores history for inference."""
         self.history = {}
+        # Labels from the training data itself; the delay ensures a row only sees labels of
+        # transactions at least LABEL_DELAY_DAYS older than itself (never its own).
+        self._set_label_history(df)
         X = self._engineer(df)
         cols = [c for c in X.columns if c not in DROP_COLS]
         self.categorical = {

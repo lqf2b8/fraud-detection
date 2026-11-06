@@ -19,3 +19,7 @@ TIME_COL = "TransactionDT"
 # Fraction of the most recent transactions held out for validation (time-based split).
 VALID_FRACTION = float(os.getenv("VALID_FRACTION", "0.2"))
 RANDOM_STATE = 42
+
+# Fraud labels (chargebacks) arrive late. Label-based features may only use labels at least this
+# many days old, so the model never relies on information a live system wouldn't have yet.
+LABEL_DELAY_DAYS = float(os.getenv("LABEL_DELAY_DAYS", "30"))

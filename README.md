@@ -70,6 +70,7 @@ tests/                 unit + API tests (run on synthetic data)
 - **Validation:** train on the earliest 80% of transactions by time and validate on the latest 20%. This mirrors deployment and exposes drift.
 - **Metrics:** PR AUC and precision at the top 1% and 5% of scores (a fixed review capacity), not just ROC AUC.
 - **Entity features are past-only:** each transaction sees only earlier transactions, both in training and at inference, so validation reflects what a live system would know.
+- **Known-fraud history with a reporting delay:** for each customer, card, email + address and device, the model sees how many of its earlier transactions were confirmed fraud. It only counts labels at least `LABEL_DELAY_DAYS` (default 30) old, which mimics chargeback lag. A transaction never sees its own label or any label too recent to have been reported yet. Tests check this.
 - **Segments:** metrics are also reported for customers seen in training vs. new customers. The EDA found new customers 2.3× riskier.
 - **Threshold:** stored with the model, and it can be overridden per request (`/predict?threshold=0.3`).
 
@@ -100,6 +101,7 @@ there's no history to draw on. That's where most of the remaining headroom is.
 
 - [x] EDA notebook: fraud rate over time, missingness patterns, amount distributions, pseudo-customer IDs
 - [x] Entity resolution: pseudo-customer UID (card1 + addr1 + email + account start day) with past-only aggregates (prior count, typical amount, amount ratio, time since last transaction)
+- [x] Known-fraud history per customer / card / email + address / device, with a 30-day label delay
 - [ ] Velocity and behavioral features (counts and amounts per entity over time windows)
 - [ ] Graph features: shared cards, devices and emails linking entities (fraud-ring detection)
 - [ ] Unsupervised anomaly score (Isolation Forest) as a complementary signal

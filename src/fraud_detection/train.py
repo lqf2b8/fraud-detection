@@ -27,7 +27,7 @@ def time_split(df: pd.DataFrame, valid_frac: float = config.VALID_FRACTION):
     return df.iloc[:cut], df.iloc[cut:]
 
 
-FEATURE_SET = "v1-entity"
+FEATURE_SET = "v2-known-fraud"
 
 
 def segment_metrics(fb: FeatureBuilder, valid_df: pd.DataFrame, y_va, scores) -> dict:
@@ -91,6 +91,7 @@ def train(df: pd.DataFrame, data_source: str) -> dict:
         "n_features": len(fb.feature_names),
         "best_iteration": int(model.best_iteration_ or model.n_estimators),
         "feature_set": FEATURE_SET,
+        "label_delay_days": config.LABEL_DELAY_DAYS,
         "metrics": metrics,
         "segments": segments,
         "threshold": metrics["best_f1_threshold"],
