@@ -96,7 +96,8 @@ tests/                 unit + API tests (run on synthetic data)
 ## Results
 
 v2 was slightly optimistic: early stopping picked the number of trees on the validation set. From v2.1 on,
-validation is used only for reporting.
+validation is used only for reporting. Note: ROC AUC here isn't comparable to the Kaggle leaderboard, which
+scored a hidden test set. These results come from a time split of the training data, with stricter rules.
 
 All results come from the same time-based holdout: the latest 20% of training transactions, 118,108 rows, 3.44% fraud.
 "Fraud caught" is recall at that review budget.
@@ -107,16 +108,23 @@ All results come from the same time-based holdout: the latest 20% of training tr
 | v1 | + past-only customer (UID) & card history features | 0.592 | 0.925 | 90.4% | 44.0% | ~64% |
 | v2 | + known-fraud history (customer, card, email + address, device), 30-day label delay | 0.659 | 0.941 | 96.3% | 46.7% | ~68% |
 | v2.1 | Stricter evaluation: early stopping off validation, raw timestamp dropped | 0.634 | 0.933 | 94.6% | 44.7% | ~65% |
+| v2.2 | Refit on the full training period after early stopping | **0.660** | **0.940** | **95.9%** | **46.9%** | **~68%** |
 
-Random scoring would give a PR AUC of 0.034 (the fraud rate). With v2, reviewing the top 5% of
-transactions by model score catches about 68% of all fraud, and 96% of the top 1% are fraud.
+Random scoring would give a PR AUC of 0.034 (the fraud rate). With v2.2, reviewing the top 5% of
+transactions by model score catches about 68% of all fraud, and 96% of the top 1% are fraud. v2.2 matches v2
+under the stricter evaluation.
+
+**Operating point (v2.2, assuming $10 per manual review):** flag 9.9% of transactions → catch **80% of fraud
+dollars** at 27% precision. Total cost (reviews + fraud missed) is **$239k vs. $610k with no model, 61% lower**,
+over the ~1-month validation period. The review cost is an illustrative assumption, not from the data; the
+dashboard lets you change it, and the best threshold moves accordingly.
 
 **By segment:**
 
-| Segment | Share of validation | Fraud rate | v1 PR AUC | v2 PR AUC |
+| Segment | Share of validation | Fraud rate | v1 PR AUC | v2.2 PR AUC |
 |---|---|---|---|---|
-| Customer seen in training | 39.9% | 1.98% | 0.722 | **0.919** |
-| New customer | 60.1% | 4.41% | 0.570 | 0.560 |
+| Customer seen in training | 39.9% | 1.98% | 0.722 | **0.922** |
+| New customer | 60.1% | 4.41% | 0.570 | 0.558 |
 
 Known-fraud history is the strongest signal for returning customers. It doesn't help new customers:
 device and email + address history added nothing measurable. New customers make up most of the
