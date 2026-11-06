@@ -60,7 +60,7 @@ src/fraud_detection/   shared library: config, data, features, train, evaluate
 services/trainer/      training job image
 services/api/          FastAPI service
 services/dashboard/    Plotly Dash app
-notebooks/             EDA and experiments
+notebooks/             EDA and experiments (01_eda: drift, signals, missingness, entity resolution)
 scripts/               data download (cross-platform Python)
 tests/                 unit + API tests (run on synthetic data)
 ```
@@ -71,9 +71,21 @@ tests/                 unit + API tests (run on synthetic data)
 - **Metrics:** PR AUC and precision at the top 1% and 5% of scores (a fixed review capacity), not just ROC AUC.
 - **Threshold:** stored with the model, and it can be overridden per request (`/predict?threshold=0.3`).
 
+## Results
+
+All results come from the same time-based holdout: the latest 20% of training transactions, 118,108 rows, 3.44% fraud.
+"Fraud caught" is recall at that review budget.
+
+| Version | Change | PR AUC | ROC AUC | Precision @ top 1% | Precision @ top 5% | Fraud caught @ 5% |
+|---|---|---|---|---|---|---|
+| v0 | Baseline: raw features, LightGBM | 0.588 | 0.923 | 90.6% | 43.4% | ~63% |
+
+Random scoring would give a PR AUC of 0.034 (the fraud rate). Reviewing the top 5% of transactions by
+model score catches about 63% of all fraud.
+
 ## Roadmap
 
-- [ ] EDA notebook: fraud rate over time, missingness patterns, amount distributions
+- [x] EDA notebook: fraud rate over time, missingness patterns, amount distributions, pseudo-customer IDs
 - [ ] Entity resolution: build a client UID from card/address/email and add UID-level aggregates
 - [ ] Velocity and behavioral features (counts and amounts per entity over time windows)
 - [ ] Graph features: shared cards, devices and emails linking entities (fraud-ring detection)

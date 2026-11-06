@@ -1,7 +1,7 @@
 .PHONY: install data train train-synthetic up down logs test lint
 
 install:          ## local dev environment
-	pip install -e ".[dev]" -r services/api/requirements.txt -r services/dashboard/requirements.txt
+	pip install -e ".[dev,notebook]" -r services/api/requirements.txt -r services/dashboard/requirements.txt
 
 data:             ## download IEEE-CIS data (requires Kaggle API token + joined competition)
 	python scripts/download_data.py
