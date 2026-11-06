@@ -1,4 +1,4 @@
-FEATURE_GROUPS ?= network,anomaly
+FEATURE_GROUPS ?= none
 SEED ?= 42
 
 .PHONY: install data train train-synthetic up down logs test lint
@@ -9,7 +9,7 @@ install:          ## local dev environment
 data:             ## download IEEE-CIS data (requires Kaggle API token + joined competition)
 	python scripts/download_data.py
 
-train:            ## train on real data in Docker (ablation: make train FEATURE_GROUPS=none SEED=7)
+train:            ## train on real data in Docker (ablation: make train FEATURE_GROUPS=network,anomaly SEED=7)
 	docker compose --profile train run --build --rm -e FEATURE_GROUPS=$(FEATURE_GROUPS) -e SEED=$(SEED) trainer
 
 train-synthetic:  ## train on synthetic data in Docker (no download)

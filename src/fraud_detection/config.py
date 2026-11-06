@@ -21,9 +21,10 @@ TIME_COL = "TransactionDT"
 VALID_FRACTION = float(os.getenv("VALID_FRACTION", "0.2"))
 RANDOM_STATE = int(os.getenv("SEED", "42"))
 
-# Optional feature groups, for ablations: e.g. FEATURE_GROUPS=network  or  FEATURE_GROUPS=none
+# Optional feature groups, off by default: the v3 ablation found that neither improves the model
+# (see README). Enable for experiments, e.g. FEATURE_GROUPS=network  or  FEATURE_GROUPS=network,anomaly
 FEATURE_GROUPS = {
-    g.strip() for g in os.getenv("FEATURE_GROUPS", "network,anomaly").split(",") if g.strip()
+    g.strip() for g in os.getenv("FEATURE_GROUPS", "none").split(",") if g.strip()
 } - {"none"}
 
 # Fraud labels (chargebacks) arrive late. Label-based features may only use labels at least this

@@ -113,6 +113,7 @@ All results come from the same time-based holdout: the latest 20% of training tr
 | v2.1 | Stricter evaluation: early stopping off validation, raw timestamp dropped | 0.634 | 0.933 | 94.6% | 44.7% | ~65% |
 | v2.2 | Refit on the full training period after early stopping | **0.660** | **0.940** | **95.9%** | **46.9%** | **~68%** |
 | v3 | + network features + Isolation Forest score | 0.640 | 0.937 | 95.9% | 44.4% | ~65% |
+| v3.1 | Ablation: network + anomaly off by default (= v2.2 features) | **0.660** | **0.940** | **95.9%** | **46.9%** | **~68%** |
 
 Random scoring would give a PR AUC of 0.034 (the fraud rate). With v2.2, reviewing the top 5% of
 transactions by model score catches about 68% of all fraud, and 96% of the top 1% are fraud. v2.2 matches v2
@@ -130,10 +131,27 @@ dashboard lets you change it, and the best threshold moves accordingly.
 | Customer seen in training | 39.9% | 1.98% | 0.722 | **0.922** |
 | New customer | 60.1% | 4.41% | 0.570 | 0.558 |
 
-**v3 was a negative result:** adding network features and the anomaly score lowered PR AUC (0.660 → 0.640),
-including for new customers (0.558 → 0.554), the segment it was meant to help. On its own, the anomaly
-score has some signal for new customers (PR AUC 0.153 vs. a 0.044 base rate; ROC AUC 0.73), but it adds
-nothing on top of the supervised model. An ablation is in progress (`make train FEATURE_GROUPS=...`).
+**v3 was a negative result.** Adding network features and an Isolation Forest score lowered PR AUC
+(0.660 → 0.640). An ablation with a seed-noise check located the problem:
+
+| Run | Feature groups | Seed | PR AUC | Seen customers | New customers |
+|---|---|---|---|---|---|
+| v2.2 baseline | none | 42 | 0.660 | 0.922 | 0.558 |
+| Seed check | none | 7 | 0.657 | 0.914 | 0.557 |
+| + anomaly | anomaly | 42 | 0.659 | 0.923 | 0.558 |
+| + network | network | 42 | 0.656 | 0.923 | 0.553 |
+| v3 | network + anomaly | 42 | 0.640 | 0.884 | 0.554 |
+
+- **Noise floor:** changing the seed moves PR AUC by about 0.003 overall and 0.008 for seen customers.
+- **Each group alone:** within noise. Neither helps, including for new customers, the segment they targeted.
+- **Combined:** clearly worse for seen customers (−0.038). Likely cause: crowding. Both groups add features
+  that overlap with the strong known-fraud signals, so column subsampling picks those signals less often.
+  This is a hypothesis, not proven.
+- **Anomaly score alone:** finds fraud among new customers with no labels at all (PR AUC 0.153 vs. a 0.044
+  base rate; ROC AUC 0.73), but adds nothing once the supervised model sees the same C/D columns.
+
+**Decision:** both groups stay in the code (`FEATURE_GROUPS=network,anomaly`) but are **off by default**.
+The served model is v2.2's feature set (v3.1 below).
 
 Known-fraud history is the strongest signal for returning customers. It doesn't help new customers:
 device and email + address history added nothing measurable. New customers make up most of the
@@ -150,8 +168,8 @@ likely be smaller than shown here.
 - [x] Entity resolution: pseudo-customer UID (card1 + addr1 + email + account start day) with past-only aggregates (prior count, typical amount, amount ratio, time since last transaction)
 - [x] Known-fraud history per customer / card / email + address / device, with a 30-day label delay
 - [ ] Velocity and behavioral features (counts and amounts per entity over time windows)
-- [x] Unsupervised anomaly score (Isolation Forest) as a complementary signal, aimed at new customers
-- [x] Network features: other customers and known fraudsters sharing a device, email + address or card fingerprint
+- [x] Unsupervised anomaly score (Isolation Forest) as a complementary signal, aimed at new customers (tested, no lift; off by default)
+- [x] Network features: other customers and known fraudsters sharing a device, email + address or card fingerprint (tested, no lift; off by default)
 - [ ] Multi-hop graph features (connected components, fraud-ring size) and graph embeddings
 - [ ] Conformal prediction: approve / decline / manual review based on prediction-set uncertainty
 - [x] Cost-based threshold selection (expected loss vs. review cost) with review-capacity constraint

@@ -1,10 +1,18 @@
 import numpy as np
 import pandas as pd
+import pytest
 
+from fraud_detection import config
 from fraud_detection.anomaly import AnomalyScorer
 from fraud_detection.features import FeatureBuilder
 
 DAY = 86_400
+
+
+@pytest.fixture(autouse=True)
+def _enable_optional_groups(monkeypatch):
+    # Network and anomaly features are off by default; these tests exercise them explicitly.
+    monkeypatch.setattr(config, "FEATURE_GROUPS", {"network", "anomaly"})
 
 
 def _txn(tid, day, card1, device, fraud, d1=0.0):
@@ -61,3 +69,9 @@ def test_anomaly_score_flags_outliers():
     df = pd.DataFrame({"TransactionAmt": rng.lognormal(4, 0.3, 2000), "C1": rng.poisson(2, 2000)})
     s = AnomalyScorer().fit(df).score(pd.DataFrame({"TransactionAmt": [55.0, 50_000.0], "C1": [2, 400]}))
     assert s.iloc[1] > s.iloc[0]
+
+
+def test_optional_groups_off_by_default(monkeypatch):
+    monkeypatch.setattr(config, "FEATURE_GROUPS", set())
+    X = FeatureBuilder().fit_transform(_ring())
+    assert not [c for c in X if c.startswith("net_") or c == "anomaly_score"]

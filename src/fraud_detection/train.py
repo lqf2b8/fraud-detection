@@ -33,7 +33,7 @@ def time_split(df: pd.DataFrame, valid_frac: float = config.VALID_FRACTION):
     return df.iloc[:cut], df.iloc[cut:]
 
 
-FEATURE_SET = "v3-network-anomaly"
+FEATURE_SET = "v3.1-known-fraud"
 
 
 def segment_metrics(fb: FeatureBuilder, valid_df: pd.DataFrame, y_va, scores) -> dict:
