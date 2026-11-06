@@ -72,12 +72,13 @@ def pick_examples(valid_df: pd.DataFrame, scores, threshold: float, per_group: i
     return df.loc[idx].reset_index(drop=True)
 
 
-def fit_model(X_all: pd.DataFrame, y_all: pd.Series, seed: int):
+def fit_model(X_all: pd.DataFrame, y_all: pd.Series, seed: int, sample_weight=None):
     """Choose the tree count by early stopping on the most recent slice of the training period,
     then refit on all training data. Validation is never used to make any modeling choice."""
     es_cut = int(len(X_all) * (1 - config.EARLY_STOP_FRACTION))
     X_tr, y_tr = X_all.iloc[:es_cut], y_all.iloc[:es_cut]
     X_es, y_es = X_all.iloc[es_cut:], y_all.iloc[es_cut:]
+    w = None if sample_weight is None else np.asarray(sample_weight, dtype=float)
     params = {
         "learning_rate": 0.03,
         "num_leaves": 64,
@@ -93,6 +94,7 @@ def fit_model(X_all: pd.DataFrame, y_all: pd.Series, seed: int):
         selector.fit(
             X_tr,
             y_tr,
+            sample_weight=None if w is None else w[:es_cut],
             eval_set=[(X_es, y_es)],
             eval_metric="average_precision",
             callbacks=[lgb.early_stopping(100, verbose=False)],
@@ -100,7 +102,7 @@ def fit_model(X_all: pd.DataFrame, y_all: pd.Series, seed: int):
     best_iter = int(selector.best_iteration_ or selector.n_estimators)
     n_trees = max(1, round(best_iter / (1 - config.EARLY_STOP_FRACTION)))
     model = lgb.LGBMClassifier(n_estimators=n_trees, **params)
-    model.fit(X_all, y_all)
+    model.fit(X_all, y_all, sample_weight=w)
     return model, best_iter, n_trees
 
 

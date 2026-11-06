@@ -8,6 +8,7 @@ reports each seed plus the mean and spread. It never writes to models/, so the s
     make experiment                               # baseline feature set, seeds 1-5
     make experiment FEATURE_GROUPS=velocity       # a candidate feature group
     make experiment ARGS=--route                  # separate model for new customers
+    make experiment ARGS="--half-life 0 30 90"    # recency weighting, several half-lives
     python -m fraud_detection.experiment --seeds 1 2 3 --nrows 200000
 """
 
@@ -32,13 +33,33 @@ def _get(row: dict, group: str, metric: str) -> float:
     return float(row.get(group, {}).get(metric, float("nan")))
 
 
-def run(df, seeds: list[int], route: bool = False) -> dict:
-    train_df, valid_df = time_split(df)
-    t0 = time.time()
-    fb = FeatureBuilder()
-    X_all, y_all = fb.fit_transform(train_df), train_df[config.TARGET]
-    X_va, y_va = fb.transform(valid_df), valid_df[config.TARGET]
-    print(f"features: {X_all.shape[1]} columns, built in {time.time() - t0:.0f}s", flush=True)
+def recency_weights(t: np.ndarray, half_life_days: float | None) -> np.ndarray | None:
+    """Weight halves every half_life_days going back from the newest training transaction,
+    rescaled to mean 1 so the effective learning rate is unchanged."""
+    if not half_life_days:
+        return None
+    age_days = (t.max() - t) / 86_400
+    w = 0.5 ** (age_days / half_life_days)
+    return w / w.mean()
+
+
+def run(df, seeds: list[int], route: bool = False, half_life: float | None = None,
+        _cache: dict | None = None) -> dict:
+    if _cache:
+        train_df, valid_df, fb, X_all, y_all, X_va, y_va = _cache["data"]
+    else:
+        train_df, valid_df = time_split(df)
+        t0 = time.time()
+        fb = FeatureBuilder()
+        X_all, y_all = fb.fit_transform(train_df), train_df[config.TARGET]
+        X_va, y_va = fb.transform(valid_df), valid_df[config.TARGET]
+        print(f"features: {X_all.shape[1]} columns, built in {time.time() - t0:.0f}s", flush=True)
+        if _cache is not None:
+            _cache["data"] = (train_df, valid_df, fb, X_all, y_all, X_va, y_va)
+    weights = recency_weights(train_df[config.TIME_COL].to_numpy(float), half_life)
+    if weights is not None:
+        print(f"recency weighting: half-life {half_life:g} days; oldest weight "
+              f"{weights.min():.2f}, newest {weights.max():.2f} (mean 1)", flush=True)
     if route:
         # New-customer model: trained only on each customer's first transaction (no prior history),
         # so label-propagated repeat fraud doesn't dominate its loss. Validation transactions whose
@@ -52,10 +73,11 @@ def run(df, seeds: list[int], route: bool = False) -> dict:
     rows = []
     for seed in seeds:
         t0 = time.time()
-        model, _best_iter, n_trees = fit_model(X_all, y_all, seed)
+        model, _best_iter, n_trees = fit_model(X_all, y_all, seed, weights)
         scores = model.predict_proba(X_va)[:, 1]
         if route:
-            new_model, _, _ = fit_model(X_all[first_tx], y_all[first_tx], seed)
+            new_model, _, _ = fit_model(X_all[first_tx], y_all[first_tx], seed,
+                                        None if weights is None else weights[first_tx])
             scores = np.where(seen_va, scores, new_model.predict_proba(X_va)[:, 1])
         overall = evaluate(y_va, scores)
         seg = segment_metrics(fb, valid_df, y_va, scores)
@@ -74,7 +96,8 @@ def run(df, seeds: list[int], route: bool = False) -> dict:
         vals = np.array([_get(r, g, m) for r in rows])
         summary[f"{g}.{m}"] = {"mean": round(float(vals.mean()), 4),
                                "sd": round(float(vals.std(ddof=1)) if len(vals) > 1 else 0.0, 4)}
-    return {"feature_groups": sorted(config.FEATURE_GROUPS), "route": route, "seeds": seeds,
+    return {"feature_groups": sorted(config.FEATURE_GROUPS), "route": route,
+            "half_life_days": half_life, "seeds": seeds,
             "summary": summary,
             "runs": rows}
 
@@ -84,17 +107,27 @@ def main() -> None:
     parser.add_argument("--seeds", type=int, nargs="+", default=[1, 2, 3, 4, 5])
     parser.add_argument("--synthetic", action="store_true")
     parser.add_argument("--nrows", type=int, default=None)
+    parser.add_argument("--half-life", type=float, nargs="+", default=[0],
+                        help="recency weighting half-life(s) in days; 0 = none. Several = one run each")
     parser.add_argument("--route", action="store_true",
                         help="separate model for new customers, trained on first transactions")
     args = parser.parse_args()
     df = make_synthetic() if args.synthetic else load_raw(nrows=args.nrows)
-    result = run(df, args.seeds, args.route)
-    print("\nSUMMARY  feature_groups =", result["feature_groups"] or ["none"],
-          " routing =", "on" if args.route else "off")
-    for k, v in result["summary"].items():
-        print(f"  {k:<28} {v['mean']:.4f} ± {v['sd']:.4f}")
-    print(json.dumps({"feature_groups": result["feature_groups"], "route": args.route,
-                      "summary": result["summary"]}))
+    cache: dict = {}
+    results = []
+    for hl in args.half_life:
+        print(f"\n=== half-life: {hl:g} days ===" if hl else "\n=== no recency weighting ===",
+              flush=True)
+        results.append(run(df, args.seeds, args.route, hl or None, _cache=cache))
+    for args_hl, result in zip(args.half_life, results):
+        label = f"half-life {args_hl:g}d" if args_hl else "unweighted"
+        print(f"\nSUMMARY  feature_groups = {result['feature_groups'] or ['none']}  "
+              f"routing = {'on' if args.route else 'off'}  {label}")
+        for k, v in result["summary"].items():
+            print(f"  {k:<28} {v['mean']:.4f} ± {v['sd']:.4f}")
+    print(json.dumps([{"feature_groups": r["feature_groups"], "route": args.route,
+                       "half_life_days": r["half_life_days"], "summary": r["summary"]}
+                      for r in results]))
 
 
 if __name__ == "__main__":
