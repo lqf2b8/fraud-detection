@@ -10,6 +10,7 @@ reports each seed plus the mean and spread. It never writes to models/, so the s
     make experiment ARGS=--route                  # separate model for new customers
     make experiment ARGS="--half-life 0 30 90"    # recency weighting, several half-lives
     make experiment ARGS="--seeds 1 2 3 --variants catnum freq nan999 dnorm"   # preprocessing
+    make experiment ARGS="--route-variant catnum" # seen: baseline model, new: catnum model
     python -m fraud_detection.experiment --seeds 1 2 3 --nrows 200000
 """
 
@@ -45,7 +46,8 @@ def recency_weights(t: np.ndarray, half_life_days: float | None) -> np.ndarray |
 
 
 def run(df, seeds: list[int], route: bool = False, half_life: float | None = None,
-        _cache: dict | None = None, variant: str = "baseline") -> dict:
+        _cache: dict | None = None, variant: str = "baseline",
+        route_variant: str | None = None) -> dict:
     if _cache:
         train_df, valid_df, fb, X_all, y_all, X_va, y_va = _cache["data"]
     else:
@@ -57,6 +59,13 @@ def run(df, seeds: list[int], route: bool = False, half_life: float | None = Non
         print(f"features: {X_all.shape[1]} columns, built in {time.time() - t0:.0f}s", flush=True)
         if _cache is not None:
             _cache["data"] = (train_df, valid_df, fb, X_all, y_all, X_va, y_va)
+    if route_variant:
+        # Both models train on all data; they differ only in preprocessing. The usual model scores
+        # customers in the training history, the variant model scores new customers.
+        Xv_all, Xv_va = preprocess.apply(route_variant, X_all, X_va, list(fb.categorical),
+                                         train_df[config.TIME_COL], valid_df[config.TIME_COL])
+        seen_va = make_uid(valid_df).isin(fb.history["uid"].index).fillna(False).to_numpy(bool)
+        print(f"routing by preprocessing: seen -> {variant}, new -> {route_variant}", flush=True)
     if variant != "baseline":
         X_all, X_va = preprocess.apply(variant, X_all, X_va, list(fb.categorical),
                                        train_df[config.TIME_COL], valid_df[config.TIME_COL])
@@ -80,6 +89,9 @@ def run(df, seeds: list[int], route: bool = False, half_life: float | None = Non
         t0 = time.time()
         model, _best_iter, n_trees = fit_model(X_all, y_all, seed, weights)
         scores = model.predict_proba(X_va)[:, 1]
+        if route_variant:
+            v_model, _, _ = fit_model(Xv_all, y_all, seed, weights)
+            scores = np.where(seen_va, scores, v_model.predict_proba(Xv_va)[:, 1])
         if route:
             new_model, _, _ = fit_model(X_all[first_tx], y_all[first_tx], seed,
                                         None if weights is None else weights[first_tx])
@@ -116,6 +128,8 @@ def main() -> None:
                         help="recency weighting half-life(s) in days; 0 = none. Several = one run each")
     parser.add_argument("--variants", nargs="+", default=["baseline"],
                         help="preprocessing variants, e.g. catnum freq catnum+freq+dnorm nan999")
+    parser.add_argument("--route-variant", default=None,
+                        help="score new customers with a model using this preprocessing variant")
     parser.add_argument("--route", action="store_true",
                         help="separate model for new customers, trained on first transactions")
     args = parser.parse_args()
@@ -126,8 +140,12 @@ def main() -> None:
         for variant in args.variants:
             preprocess.parse(variant)  # fail fast on typos
             label = (f"half-life {hl:g}d" if hl else "unweighted") + f", variant {variant}"
+            if args.route_variant:
+                preprocess.parse(args.route_variant)
+                label += f", new customers -> {args.route_variant}"
             print(f"\n=== {label} ===", flush=True)
-            r = run(df, args.seeds, args.route, hl or None, _cache=cache, variant=variant)
+            r = run(df, args.seeds, args.route, hl or None, _cache=cache, variant=variant,
+                    route_variant=args.route_variant)
             results.append((label, r))
     for label, result in results:
         print(f"\nSUMMARY  feature_groups = {result['feature_groups'] or ['none']}  "
