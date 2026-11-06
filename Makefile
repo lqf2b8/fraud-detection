@@ -1,7 +1,7 @@
 FEATURE_GROUPS ?= none
 SEED ?= 42
 
-.PHONY: install data train train-synthetic experiment up down logs test lint gcp-bootstrap publish-model
+.PHONY: install data train train-synthetic experiment diagnose up down logs test lint gcp-bootstrap publish-model
 
 install:          ## local dev environment
 	pip install -e ".[dev,notebook]" -r services/api/requirements.txt -r services/dashboard/requirements.txt
@@ -17,6 +17,9 @@ train-synthetic:  ## train on synthetic data in Docker (no download)
 
 experiment:       ## compare a feature set over 5 seeds, mean ± sd (never touches ./models)
 	docker compose --profile train run --build --rm -e FEATURE_GROUPS=$(FEATURE_GROUPS) --entrypoint python trainer -m fraud_detection.experiment
+
+diagnose:         ## why a feature group helps or hurts: drift, adversarial validation, permutation
+	docker compose --profile train run --build --rm -e FEATURE_GROUPS=$(FEATURE_GROUPS) --entrypoint python trainer -m fraud_detection.diagnose
 
 up:               ## start API (:8000) and dashboard (:8050)
 	docker compose up --build -d

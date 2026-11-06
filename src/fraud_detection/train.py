@@ -7,6 +7,7 @@ Usage:
 
 import argparse
 import json
+import warnings
 from datetime import UTC, datetime
 
 import joblib
@@ -87,13 +88,15 @@ def fit_model(X_all: pd.DataFrame, y_all: pd.Series, seed: int):
         "verbose": -1,
     }
     selector = lgb.LGBMClassifier(n_estimators=2000, **params)
-    selector.fit(
-        X_tr,
-        y_tr,
-        eval_set=[(X_es, y_es)],
-        eval_metric="average_precision",
-        callbacks=[lgb.early_stopping(100, verbose=False)],
-    )
+    with warnings.catch_warnings():  # newer LightGBM deprecates eval_set; it still works
+        warnings.filterwarnings("ignore", message=".*eval_set.*")
+        selector.fit(
+            X_tr,
+            y_tr,
+            eval_set=[(X_es, y_es)],
+            eval_metric="average_precision",
+            callbacks=[lgb.early_stopping(100, verbose=False)],
+        )
     best_iter = int(selector.best_iteration_ or selector.n_estimators)
     n_trees = max(1, round(best_iter / (1 - config.EARLY_STOP_FRACTION)))
     model = lgb.LGBMClassifier(n_estimators=n_trees, **params)
