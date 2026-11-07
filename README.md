@@ -266,6 +266,7 @@ likely be smaller than shown here.
 - [x] Cost-based threshold selection (expected loss vs. review cost) with review-capacity constraint
 - [x] SHAP explanations returned by the API and shown in the dashboard
 - [x] v5: segment routing (new customers scored with rare-value-grouped categoricals)
+- [ ] Seed bagging (`make train BAG_SEEDS=5`; averaged in log-odds so SHAP stays exact), evaluation in progress
 - [ ] Drift monitoring on score and feature distributions
 - [ ] Model card documenting assumptions, limitations and performance
 

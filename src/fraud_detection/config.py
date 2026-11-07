@@ -42,5 +42,8 @@ FALSE_POSITIVE_COST_USD = float(os.getenv("FALSE_POSITIVE_COST_USD", "0"))
 # categoricals are label-encoded with rare values grouped. "none" = one model for everyone.
 ROUTE_NEW = os.getenv("ROUTE_NEW", "catnum")
 
+# Seed bagging: train each model this many times with different seeds and average (log-odds).
+BAG_SEEDS = int(os.getenv("BAG_SEEDS") or 1)
+
 # Fraction of the training period held out for early stopping, so validation stays untouched.
 EARLY_STOP_FRACTION = float(os.getenv("EARLY_STOP_FRACTION", "0.1"))

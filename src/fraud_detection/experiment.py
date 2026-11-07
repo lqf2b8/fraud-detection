@@ -21,6 +21,7 @@ import time
 import numpy as np
 
 from fraud_detection import config, preprocess
+from fraud_detection.bagging import average_logits
 from fraud_detection.data import load_raw, make_synthetic
 from fraud_detection.evaluate import cost_optimal_point, evaluate, threshold_table
 from fraud_detection.features import FeatureBuilder, make_uid
@@ -45,6 +46,20 @@ def recency_weights(t: np.ndarray, half_life_days: float | None) -> np.ndarray |
     age_days = (t.max() - t) / 86_400
     w = 0.5 ** (age_days / half_life_days)
     return w / w.mean()
+
+
+def _row(seed, scores, y_va, valid_df, fb, X_va) -> dict:
+    overall = evaluate(y_va, scores)
+    op = cost_optimal_point(threshold_table(y_va, scores, valid_df.get("TransactionAmt", 0.0)),
+                            config.REVIEW_COST_USD, config.FALSE_POSITIVE_COST_USD)
+    seg = segment_metrics(fb, valid_df, y_va, scores, X_va)
+    return {
+        "seed": seed,
+        "overall": {k: overall[k] for k in ("pr_auc", "roc_auc", "precision_at_5pct")},
+        "operating": {"cost_k_usd": op["cost_usd"] / 1000,
+                      "fraud_dollars_caught": op["fraud_amt_caught_share"]},
+        **{k: {"pr_auc": v["pr_auc"]} for k, v in seg.items() if "pr_auc" in v},
+    }
 
 
 def run(df, seeds: list[int], route: bool = False, half_life: float | None = None,
@@ -86,7 +101,7 @@ def run(df, seeds: list[int], route: bool = False, half_life: float | None = Non
               f"({y_all[first_tx].mean():.2%} fraud); scores {(~seen_va).sum():,} validation rows",
               flush=True)
 
-    rows = []
+    rows, all_scores = [], []
     for seed in seeds:
         t0 = time.time()
         model, _best_iter, n_trees = fit_model(X_all, y_all, seed, weights)
@@ -98,6 +113,7 @@ def run(df, seeds: list[int], route: bool = False, half_life: float | None = Non
             new_model, _, _ = fit_model(X_all[first_tx], y_all[first_tx], seed,
                                         None if weights is None else weights[first_tx])
             scores = np.where(seen_va, scores, new_model.predict_proba(X_va)[:, 1])
+        all_scores.append(scores)
         overall = evaluate(y_va, scores)
         amounts = valid_df.get("TransactionAmt", 0.0)
         op = cost_optimal_point(threshold_table(y_va, scores, amounts), config.REVIEW_COST_USD,
@@ -115,11 +131,20 @@ def run(df, seeds: list[int], route: bool = False, half_life: float | None = Non
             f"{g}.{m} {_get(row, g, m):.4f}" for g, m in COLUMNS) + f"  ({time.time() - t0:.0f}s)",
             flush=True)
 
+    bagged = None
+    if len(all_scores) > 1:
+        bag_scores = average_logits(all_scores)
+        bagged = _row("bag", bag_scores, y_va, valid_df, fb, X_va)
+        print(f"BAG of {len(all_scores)} seeds (log-odds average): " + "  ".join(
+            f"{g}.{m} {_get(bagged, g, m):.4f}" for g, m in COLUMNS), flush=True)
+
     summary = {}
     for g, m in COLUMNS:
         vals = np.array([_get(r, g, m) for r in rows])
         summary[f"{g}.{m}"] = {"mean": round(float(vals.mean()), 4),
                                "sd": round(float(vals.std(ddof=1)) if len(vals) > 1 else 0.0, 4)}
+    if bagged:
+        summary["bagged"] = {f"{g}.{m}": round(_get(bagged, g, m), 4) for g, m in COLUMNS}
     return {"feature_groups": sorted(config.FEATURE_GROUPS), "route": route,
             "half_life_days": half_life, "variant": variant, "seeds": seeds,
             "summary": summary,
@@ -158,7 +183,13 @@ def main() -> None:
         print(f"\nSUMMARY  feature_groups = {result['feature_groups'] or ['none']}  "
               f"routing = {'on' if args.route else 'off'}  {label}")
         for k, v in result["summary"].items():
+            if k == "bagged":
+                continue
             print(f"  {k:<28} {v['mean']:.4f} ± {v['sd']:.4f}")
+        if "bagged" in result["summary"]:
+            print(f"  BAGGED ({len(result['seeds'])} seeds averaged):")
+            for k, v in result["summary"]["bagged"].items():
+                print(f"  {k:<28} {v:.4f}")
     print(json.dumps([{"label": label, "summary": r["summary"]} for label, r in results]))
 
 if __name__ == "__main__":

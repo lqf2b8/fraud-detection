@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 
 from fraud_detection import config
+from fraud_detection.bagging import BaggedModel
 from fraud_detection.data import load_raw, make_synthetic
 from fraud_detection.evaluate import (
     cost_optimal_point,
@@ -133,6 +134,14 @@ def fit_model(X_all: pd.DataFrame, y_all: pd.Series, seed: int, sample_weight=No
     return model, best_iter, n_trees
 
 
+def fit_bagged(X_all: pd.DataFrame, y_all: pd.Series, n_seeds: int, base_seed: int):
+    """One model, or a seed bag of n_seeds models averaged in log-odds space."""
+    fits = [fit_model(X_all, y_all, base_seed + k) for k in range(max(1, n_seeds))]
+    if len(fits) == 1:
+        return fits[0]
+    return BaggedModel([f[0] for f in fits]), fits[0][1], [f[2] for f in fits]
+
+
 def train(df: pd.DataFrame, data_source: str) -> dict:
     train_df, valid_df = time_split(df)
 
@@ -142,14 +151,14 @@ def train(df: pd.DataFrame, data_source: str) -> dict:
     X_all, y_all = fb.fit_transform(train_df), train_df[config.TARGET]
     X_va, y_va = fb.transform(valid_df), valid_df[config.TARGET]
 
-    model, best_iter, n_trees = fit_model(X_all, y_all, config.RANDOM_STATE)
+    model, best_iter, n_trees = fit_bagged(X_all, y_all, config.BAG_SEEDS, config.RANDOM_STATE)
     routing = None
     if config.ROUTE_NEW and config.ROUTE_NEW != "none":
         if config.ROUTE_NEW != "catnum":
             raise SystemExit(f"Unsupported ROUTE_NEW={config.ROUTE_NEW!r}; use 'catnum' or 'none'")
         encoder = CatNumEncoder().fit(X_all, list(fb.categorical))
-        new_model, new_best, new_trees = fit_model(encoder.transform(X_all), y_all,
-                                                   config.RANDOM_STATE)
+        new_model, new_best, new_trees = fit_bagged(encoder.transform(X_all), y_all,
+                                                    config.BAG_SEEDS, config.RANDOM_STATE)
         model = RoutedModel(model, new_model, encoder)
         routing = {"new_customers": "catnum", "base_trees": n_trees, "new_trees": new_trees,
                    "new_best_iteration": new_best}
@@ -187,6 +196,7 @@ def train(df: pd.DataFrame, data_source: str) -> dict:
         "best_iteration": best_iter,
         "n_trees": n_trees,
         "feature_set": FEATURE_SET,
+        "bag_seeds": config.BAG_SEEDS,
         "feature_groups": sorted(config.FEATURE_GROUPS),
         "seed": config.RANDOM_STATE,
         "label_delay_days": config.LABEL_DELAY_DAYS,
@@ -230,7 +240,7 @@ def main() -> None:
         df, source = load_raw(nrows=args.nrows), "ieee-cis"
 
     meta = train(df, source)
-    keys = ("feature_set", "routing", "seed", "metrics", "segments", "operating_point")
+    keys = ("feature_set", "bag_seeds", "routing", "seed", "metrics", "segments", "operating_point")
     print(json.dumps({k: meta[k] for k in keys}, indent=2))
     print(f"Saved model to {config.MODEL_PATH}")
 

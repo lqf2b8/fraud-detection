@@ -1,5 +1,6 @@
 FEATURE_GROUPS ?= none
 SEED ?= 42
+BAG_SEEDS ?= 1
 
 .PHONY: install data train train-synthetic experiment diagnose up down logs test lint gcp-bootstrap publish-model
 
@@ -9,8 +10,8 @@ install:          ## local dev environment
 data:             ## download IEEE-CIS data (requires Kaggle API token + joined competition)
 	python scripts/download_data.py
 
-train:            ## train on real data in Docker (ablation: make train FEATURE_GROUPS=network,anomaly SEED=7)
-	docker compose --profile train run --build --rm -e FEATURE_GROUPS=$(FEATURE_GROUPS) -e SEED=$(SEED) trainer
+train:            ## train on real data in Docker (e.g. make train BAG_SEEDS=5, or FEATURE_GROUPS=network SEED=7)
+	docker compose --profile train run --build --rm -e FEATURE_GROUPS=$(FEATURE_GROUPS) -e SEED=$(SEED) -e BAG_SEEDS=$(BAG_SEEDS) trainer
 
 train-synthetic:  ## train on synthetic data in Docker (no download)
 	docker compose --profile train run --build --rm trainer --synthetic
