@@ -148,7 +148,8 @@ All results come from the same time-based holdout: the latest 20% of training tr
 | v2.2 | Refit on the full training period after early stopping | **0.660** | **0.940** | **95.9%** | **46.9%** | **~68%** |
 | v3 | + network features + Isolation Forest score | 0.640 | 0.937 | 95.9% | 44.4% | ~65% |
 | v3.1 | Ablation: network + anomaly off by default (= v2.2 features) | 0.660 | 0.940 | 95.9% | 46.9% | ~68% |
-| v5 | Routed: new customers scored with rare-value-grouped categoricals | **0.662** | 0.939 | 95.7% | **47.2%** | **~69%** |
+| v5 | Routed: new customers scored with rare-value-grouped categoricals | 0.662 | 0.939 | 95.7% | 47.2% | ~69% |
+| v5.1 | + seed bagging (5 LightGBM seeds per route, log-odds average) | **0.665** | **0.940** | **95.7%** | **47.0%** | **~68%** |
 
 Random scoring would give a PR AUC of 0.034 (the fraud rate). With v2.2, reviewing the top 5% of
 transactions by model score catches about 68% of all fraud, and 96% of the top 1% are fraud. v2.2 matches v2
@@ -172,8 +173,14 @@ dashboard lets you change it, and the best threshold moves accordingly.
 is lifted by known-fraud accounts, which are near-trivial because Vesta labels an account's later transactions as fraud.
 Fraud among trusted customers (mostly account takeover) is rare, 0.09%, and hard to detect.
 
-At the $10-per-review operating point, v5 costs $244K vs. $239K for v2.2: better ranking by count of frauds, but slightly
-fewer fraud dollars caught at its threshold (77% vs. 80%). That's one seed; the dollar comparison across seeds is pending.
+**Dollar cost is noisy.** Across 5 seeds, v5's cost at the $10-per-review operating point ranged from $239K to $250K
+(±$4.7K) and fraud dollars caught from 73% to 79%: a handful of large frauds dominate the totals. Cost differences of a few
+thousand dollars between versions (v2.2 $239K, v5 $244K, v5.1 $246K, all single runs) are within that noise. PR AUC, which
+counts every fraud, is the more stable comparison.
+
+**v5.1 (seed bagging):** averaging 5 seeds beat the typical single model on every PR AUC metric in the 5-seed experiment
+(overall 0.663 → 0.668, new customers 0.566 → 0.572, excluding known fraud 0.569 → 0.576). The trained v5.1 (seeds
+42–46) improves most where it matters: no prior info 0.573 → 0.580, and prior known legit (account takeover) 0.179 → 0.213.
 
 **By segment (seen vs. new, v2.2 vs. earlier):**
 
@@ -266,7 +273,7 @@ likely be smaller than shown here.
 - [x] Cost-based threshold selection (expected loss vs. review cost) with review-capacity constraint
 - [x] SHAP explanations returned by the API and shown in the dashboard
 - [x] v5: segment routing (new customers scored with rare-value-grouped categoricals)
-- [ ] Seed bagging (`make train BAG_SEEDS=5`; averaged in log-odds so SHAP stays exact), evaluation in progress
+- [x] Seed bagging (`make train BAG_SEEDS=5`; averaged in log-odds so SHAP stays exact)
 - [ ] Drift monitoring on score and feature distributions
 - [ ] Model card documenting assumptions, limitations and performance
 
